@@ -1,0 +1,173 @@
+# ---------------------------------------------------------------------------
+# docker-compose.yml — Compose ÚNICO, parametrizado, usado nos três ambientes
+# (dev, staging, production). O isolamento vem do nome do projeto Compose
+# (-p gini-<env>) e do diretório de trabalho (/opt/gini/<env>).
+#
+# Execução no servidor, sempre de dentro de /opt/gini/<env>/:
+#
+#   docker compose -p gini-<env> \
+#     --env-file .env --env-file images.env \
+#     -f docker-compose.yml up -d
+#
+#   .env        -> configuração e segredos do ambiente. Criado à mão no
+#                  servidor, modo 600, NUNCA versionado. Modelo:
+#                  environments/<env>/.env.example
+#   images.env  -> SOMENTE FRONTEND_TAG e BACKEND_TAG. Reescrito pelo
+#                  scripts/deploy.sh a cada deploy.
+#
+# Validação local (sem subir nada):
+#   docker compose \
+#     --env-file environments/dev/.env.example \
+#     --env-file environments/dev/images.env.example \
+#     -f docker/docker-compose.yml config
+#
+# Observações de segurança:
+#   - O serviço `db` NÃO publica porta no host. Portas publicadas pelo Docker
+#     contornam as regras do UFW, então expor o Postgres equivaleria a deixá-lo
+#     aberto na rede apesar do firewall.
+#   - As migrations são aplicadas pelo Flyway no startup do backend; elas vivem
+#     no repositório do backend, não aqui.
+# ---------------------------------------------------------------------------
+
+name: gini
+
+# Bloco reutilizado pelos três serviços: rotação de log por container, como
+# reforço ao padrão definido em /etc/docker/daemon.json pelo bootstrap.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # -------------------------------------------------------------------------
+  # Banco de dados — um container por ambiente, volume próprio, sem porta
+  # publicada. Acessível apenas de dentro de backend-net.
+  # -------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: gini-${ENV_NAME:?defina ENV_NAME (dev|staging|production) no .env}-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB no .env}
+      POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER no .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      # Mantém o locale previsível entre ambientes e recriações do volume.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -q"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging: *logging
+    labels:
+      br.fatec.gini.environment: ${ENV_NAME}
+      br.fatec.gini.service: db
+
+  # -------------------------------------------------------------------------
+  # Backend — Java 21 + Spring Boot. Aplica as migrations do Flyway no startup,
+  # por isso o start_period do healthcheck é generoso (90s).
+  # -------------------------------------------------------------------------
+  backend:
+    image: ${BACKEND_IMAGE:?defina BACKEND_IMAGE no .env}:${BACKEND_TAG:?defina BACKEND_TAG no images.env}
+    container_name: gini-${ENV_NAME}-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      # `db` é o nome do serviço: resolvido pelo DNS interno de backend-net.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?defina CORS_ALLOWED_ORIGINS no .env}
+    ports:
+      # A porta interna é sempre 8080 (contrato entre repositórios); só a porta
+      # publicada no host muda por ambiente.
+      - "${BACKEND_PORT:?defina BACKEND_PORT no .env}:8080"
+    networks:
+      - backend-net
+      - frontend-net
+    healthcheck:
+      # REQUISITO DA IMAGEM DO BACKEND: precisa ter `curl` OU `wget` no estágio
+      # final. Tentamos os dois para não amarrar o compose a uma base específica.
+      #   - eclipse-temurin:21-jre         -> tem curl e wget  (OK)
+      #   - eclipse-temurin:21-jre-alpine  -> tem wget         (OK)
+      #   - *-slim / distroless            -> NÃO tem nenhum   (healthcheck nunca passa)
+      # Conferir a imagem publicada:
+      #   docker run --rm --entrypoint sh <imagem>:<tag> -c 'command -v curl || command -v wget'
+      # Se faltar, o repositório do backend precisa adicionar uma linha ao
+      # Dockerfile (ex.: `RUN apt-get update && apt-get install -y --no-install-recommends curl`).
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS http://127.0.0.1:8080/actuator/health
+          || wget -qO- http://127.0.0.1:8080/actuator/health
+          || exit 1
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 90s
+    logging: *logging
+    labels:
+      br.fatec.gini.environment: ${ENV_NAME}
+      br.fatec.gini.service: backend
+
+  # -------------------------------------------------------------------------
+  # Frontend — Next.js 16. A URL da API é embutida no build, então a imagem é
+  # específica do ambiente (tags vindas das branches dev/staging/main).
+  # -------------------------------------------------------------------------
+  frontend:
+    image: ${FRONTEND_IMAGE:?defina FRONTEND_IMAGE no .env}:${FRONTEND_TAG:?defina FRONTEND_TAG no images.env}
+    container_name: gini-${ENV_NAME}-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+    ports:
+      - "${FRONTEND_PORT:?defina FRONTEND_PORT no .env}:3000"
+    networks:
+      # Fora de backend-net de propósito: o frontend não fala com o banco.
+      - frontend-net
+    healthcheck:
+      # Usa o próprio Node (sempre presente numa imagem Next.js) em vez de curl
+      # ou wget — `node:*-slim` não traz nenhum dos dois. `fetch` é global a
+      # partir do Node 18, e o Next.js 16 exige Node 20+.
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/api/health')
+          .then(r => process.exit(r.ok ? 0 : 1))
+          .catch(() => process.exit(1))
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
+    logging: *logging
+    labels:
+      br.fatec.gini.environment: ${ENV_NAME}
+      br.fatec.gini.service: frontend
+
+# Redes e volumes recebem o prefixo do projeto (gini-<env>_...), logo os três
+# ambientes convivem no mesmo host sem colisão.
+networks:
+  backend-net:
+    driver: bridge
+  frontend-net:
+    driver: bridge
+
+volumes:
+  db-data:
+    driver: local
