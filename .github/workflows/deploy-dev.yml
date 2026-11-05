@@ -1,0 +1,152 @@
+# ---------------------------------------------------------------------------
+# deploy-dev.yml — Deploy AUTOMÁTICO do ambiente `dev`.
+#
+# Disparado por `repository_dispatch` enviado pelos repositórios de aplicação
+# (frontend-nextjs / backend-java) depois que o job `build-release-images`
+# publica a imagem no ghcr.io — e SOMENTE a partir da branch `dev`.
+#
+# Contrato do client_payload (ver docs/estrategia-gatilhos.md):
+#   service : "frontend" | "backend"
+#   tag     : tag da imagem publicada (ex.: sha-a1b2c3d)
+#   sha     : commit completo (informativo)
+#   branch  : precisa ser "dev"
+#
+# Teste manual do gatilho:
+#   gh api repos/PI-AMS-2025-2026/banco-infra/dispatches \
+#     -f event_type=image-published \
+#     -f 'client_payload[service]=backend' \
+#     -f 'client_payload[tag]=sha-a1b2c3d' \
+#     -f 'client_payload[branch]=dev'
+#
+# SEGURANÇA: nenhum gatilho `pull_request`/`pull_request_target` — este workflow
+# roda em runner self-hosted com acesso ao host. Ver docs/seguranca-runner.md.
+# ---------------------------------------------------------------------------
+name: Deploy dev
+
+on:
+  repository_dispatch:
+    types: [image-published]
+
+# Só leitura: o workflow não escreve nada no repositório.
+permissions:
+  contents: read
+
+# Um deploy de dev por vez; não cancelamos um deploy em andamento no meio de um
+# `docker compose up` para não deixar o ambiente em estado indefinido.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy automático em dev
+    runs-on: [self-hosted, linux, x64, gini-local]
+    environment: dev
+    timeout-minutes: 30
+
+    steps:
+      # ---------------------------------------------------------------------
+      # 1. Validar o payload ANTES de qualquer comando que toque no servidor.
+      # Os valores entram por `env:` — nunca interpolados dentro do script.
+      # ---------------------------------------------------------------------
+      - name: Validar payload do dispatch
+        id: payload
+        env:
+          PAYLOAD_SERVICE: ${{ github.event.client_payload.service }}
+          PAYLOAD_TAG: ${{ github.event.client_payload.tag }}
+          PAYLOAD_BRANCH: ${{ github.event.client_payload.branch }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+
+          echo "service=${PAYLOAD_SERVICE:-<vazio>}"
+          echo "branch=${PAYLOAD_BRANCH:-<vazio>}"
+          echo "tag=${PAYLOAD_TAG:-<vazio>}"
+          echo "sha=${PAYLOAD_SHA:-<vazio>}"
+
+          if [[ "${PAYLOAD_SERVICE:-}" != "frontend" && "${PAYLOAD_SERVICE:-}" != "backend" ]]; then
+            echo "::error::'service' invalido: '${PAYLOAD_SERVICE:-<vazio>}'. Esperado 'frontend' ou 'backend'."
+            exit 1
+          fi
+
+          # Este workflow implanta SOMENTE dev. staging/production usam o
+          # deploy.yml (manual, com aprovacao).
+          if [[ "${PAYLOAD_BRANCH:-}" != "dev" ]]; then
+            echo "::error::'branch' invalido: '${PAYLOAD_BRANCH:-<vazio>}'. Este workflow aceita apenas 'dev'."
+            exit 1
+          fi
+
+          if [[ ! "${PAYLOAD_TAG:-}" =~ ^[A-Za-z0-9_.-]{1,128}$ ]]; then
+            echo "::error::'tag' invalida: '${PAYLOAD_TAG:-<vazio>}'. Esperado ^[A-Za-z0-9_.-]{1,128}$."
+            exit 1
+          fi
+
+          {
+            echo "service=${PAYLOAD_SERVICE}"
+            echo "tag=${PAYLOAD_TAG}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Payload valido." >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------------
+      # 2. Checkout — só precisamos do docker-compose.yml e dos scripts.
+      # ---------------------------------------------------------------------
+      - name: Checkout deste repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # ---------------------------------------------------------------------
+      # 3. Deploy. Só a tag do serviço informado é atualizada; a outra é
+      # preservada pelo deploy.sh a partir do images.env do servidor.
+      # Os nomes das imagens vêm das Variables do repositório, não do payload.
+      # ---------------------------------------------------------------------
+      - name: Executar deploy em dev
+        env:
+          ENV_NAME: dev
+          FRONTEND_IMAGE: ${{ vars.FRONTEND_IMAGE }}
+          BACKEND_IMAGE: ${{ vars.BACKEND_IMAGE }}
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          HEALTH_TIMEOUT: "180"
+          SERVICE: ${{ steps.payload.outputs.service }}
+          TAG: ${{ steps.payload.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${SERVICE}" == "frontend" ]]; then
+            export FRONTEND_TAG="${TAG}"
+          else
+            export BACKEND_TAG="${TAG}"
+          fi
+
+          chmod +x scripts/deploy.sh scripts/backup-db.sh
+          ./scripts/deploy.sh dev
+
+      # ---------------------------------------------------------------------
+      # 4. Resumo no job (serve de histórico junto ao releases.log do servidor).
+      # ---------------------------------------------------------------------
+      - name: Resumo
+        if: always()
+        env:
+          SERVICE: ${{ steps.payload.outputs.service }}
+          TAG: ${{ steps.payload.outputs.tag }}
+          RESULTADO: ${{ job.status }}
+        run: |
+          {
+            echo "### Deploy dev"
+            echo ""
+            echo "| Campo | Valor |"
+            echo "| --- | --- |"
+            echo "| Ambiente | dev |"
+            echo "| Serviço | ${SERVICE:-?} |"
+            echo "| Tag | ${TAG:-?} |"
+            echo "| Resultado | ${RESULTADO} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # O logout evita deixar as credenciais do ghcr em ~/.docker/config.json
+      # do usuário gha-runner entre execuções.
+      - name: Logout do ghcr.io
+        if: always()
+        run: docker logout ghcr.io || true

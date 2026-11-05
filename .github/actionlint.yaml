@@ -1,0 +1,11 @@
+# Configuração do actionlint.
+#
+# Declara os rótulos dos nossos runners self-hosted. Sem isso o actionlint
+# reclama de `runs-on: [self-hosted, linux, x64, gini-local]`, porque só conhece
+# os rótulos dos runners hospedados pelo GitHub.
+#
+# O rótulo `gini-local` é definido no registro do runner
+# (scripts/install-runner.sh, opção --labels).
+self-hosted-runner:
+  labels:
+    - gini-local
