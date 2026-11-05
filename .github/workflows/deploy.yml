@@ -1,0 +1,189 @@
+# ---------------------------------------------------------------------------
+# deploy.yml — Deploy MANUAL de `staging` e `production`.
+#
+# Dev é automático (deploy-dev.yml, via repository_dispatch). Staging e produção
+# são sempre manuais: o frontend é buildado por ambiente (a URL da API é
+# embutida no build), então a tag precisa vir de um build da branch correta —
+# `staging` para homologação, `main` para produção.
+#
+# Como disparar:
+#   Actions -> "Deploy manual (staging/production)" -> Run workflow
+#   ou:
+#     gh workflow run deploy.yml \
+#       -f environment=staging -f service=both \
+#       -f frontend_tag=sha-1111111 -f backend_tag=sha-2222222
+#
+# ROLLBACK: rode este mesmo workflow informando a tag anterior
+# (consulte /opt/gini/<env>/releases.log no servidor). Ver docs/runbook.md.
+#
+# O ambiente `production` deve ter revisor obrigatório no GitHub Environments —
+# o job fica pendente de aprovação antes de tocar no servidor.
+#
+# SEGURANÇA: apenas `workflow_dispatch`. Nenhum gatilho automático e nenhum
+# `pull_request`. Ver docs/seguranca-runner.md.
+# ---------------------------------------------------------------------------
+name: Deploy manual (staging/production)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Ambiente de destino"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      service:
+        description: "O que atualizar"
+        required: true
+        type: choice
+        options:
+          - frontend
+          - backend
+          - both
+      frontend_tag:
+        description: "Tag da imagem do frontend (ex.: sha-a1b2c3d). Obrigatória se service = frontend ou both."
+        required: false
+        type: string
+      backend_tag:
+        description: "Tag da imagem do backend (ex.: sha-a1b2c3d). Obrigatória se service = backend ou both."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Um deploy por ambiente de cada vez. Nunca cancelamos no meio.
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy manual em ${{ inputs.environment }}
+    runs-on: [self-hosted, linux, x64, gini-local]
+    # Dispara as regras de proteção configuradas no GitHub Environments
+    # (production: revisor obrigatório).
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+
+    steps:
+      # ---------------------------------------------------------------------
+      # 1. Validar os inputs ANTES de qualquer comando no servidor.
+      # Tudo entra por `env:`; nada é interpolado dentro do script.
+      # ---------------------------------------------------------------------
+      - name: Validar inputs
+        id: inputs
+        env:
+          IN_ENVIRONMENT: ${{ inputs.environment }}
+          IN_SERVICE: ${{ inputs.service }}
+          IN_FRONTEND_TAG: ${{ inputs.frontend_tag }}
+          IN_BACKEND_TAG: ${{ inputs.backend_tag }}
+        run: |
+          set -euo pipefail
+
+          REGEX='^[A-Za-z0-9_.-]{1,128}$'
+
+          case "${IN_ENVIRONMENT}" in
+            staging|production) ;;
+            *) echo "::error::'environment' invalido: '${IN_ENVIRONMENT}'."; exit 1 ;;
+          esac
+
+          case "${IN_SERVICE}" in
+            frontend|backend|both) ;;
+            *) echo "::error::'service' invalido: '${IN_SERVICE}'."; exit 1 ;;
+          esac
+
+          precisa_frontend=0
+          precisa_backend=0
+          [[ "${IN_SERVICE}" == "frontend" || "${IN_SERVICE}" == "both" ]] && precisa_frontend=1
+          [[ "${IN_SERVICE}" == "backend"  || "${IN_SERVICE}" == "both" ]] && precisa_backend=1
+
+          if [[ "${precisa_frontend}" -eq 1 ]]; then
+            if [[ -z "${IN_FRONTEND_TAG:-}" ]]; then
+              echo "::error::'frontend_tag' e obrigatoria quando service='${IN_SERVICE}'."
+              exit 1
+            fi
+            if [[ ! "${IN_FRONTEND_TAG}" =~ ${REGEX} ]]; then
+              echo "::error::'frontend_tag' invalida: '${IN_FRONTEND_TAG}'. Esperado ${REGEX}."
+              exit 1
+            fi
+          elif [[ -n "${IN_FRONTEND_TAG:-}" ]]; then
+            echo "::warning::'frontend_tag' informada mas service='${IN_SERVICE}'; sera ignorada."
+          fi
+
+          if [[ "${precisa_backend}" -eq 1 ]]; then
+            if [[ -z "${IN_BACKEND_TAG:-}" ]]; then
+              echo "::error::'backend_tag' e obrigatoria quando service='${IN_SERVICE}'."
+              exit 1
+            fi
+            if [[ ! "${IN_BACKEND_TAG}" =~ ${REGEX} ]]; then
+              echo "::error::'backend_tag' invalida: '${IN_BACKEND_TAG}'. Esperado ${REGEX}."
+              exit 1
+            fi
+          elif [[ -n "${IN_BACKEND_TAG:-}" ]]; then
+            echo "::warning::'backend_tag' informada mas service='${IN_SERVICE}'; sera ignorada."
+          fi
+
+          # Só repassamos as tags que realmente serão aplicadas; as demais ficam
+          # vazias e o deploy.sh preserva o valor atual do images.env.
+          {
+            echo "frontend_tag=$([[ "${precisa_frontend}" -eq 1 ]] && echo "${IN_FRONTEND_TAG}" || echo '')"
+            echo "backend_tag=$([[ "${precisa_backend}" -eq 1 ]] && echo "${IN_BACKEND_TAG}" || echo '')"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Inputs validos para ${IN_ENVIRONMENT} (${IN_SERVICE})."
+
+      - name: Checkout deste repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # ---------------------------------------------------------------------
+      # 2. Deploy — mesma lógica do deploy-dev.yml; o que é comum aos dois
+      # workflows vive em scripts/deploy.sh, não duplicado em YAML.
+      # ---------------------------------------------------------------------
+      - name: Executar deploy
+        env:
+          ENV_NAME: ${{ inputs.environment }}
+          FRONTEND_IMAGE: ${{ vars.FRONTEND_IMAGE }}
+          BACKEND_IMAGE: ${{ vars.BACKEND_IMAGE }}
+          FRONTEND_TAG: ${{ steps.inputs.outputs.frontend_tag }}
+          BACKEND_TAG: ${{ steps.inputs.outputs.backend_tag }}
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          HEALTH_TIMEOUT: "240"
+        run: |
+          set -euo pipefail
+          chmod +x scripts/deploy.sh scripts/backup-db.sh
+          ./scripts/deploy.sh "${ENV_NAME}"
+
+      - name: Resumo
+        if: always()
+        env:
+          IN_ENVIRONMENT: ${{ inputs.environment }}
+          IN_SERVICE: ${{ inputs.service }}
+          FRONTEND_TAG: ${{ steps.inputs.outputs.frontend_tag }}
+          BACKEND_TAG: ${{ steps.inputs.outputs.backend_tag }}
+          RESULTADO: ${{ job.status }}
+        run: |
+          {
+            echo "### Deploy manual"
+            echo ""
+            echo "| Campo | Valor |"
+            echo "| --- | --- |"
+            echo "| Ambiente | ${IN_ENVIRONMENT} |"
+            echo "| Serviço | ${IN_SERVICE} |"
+            echo "| frontend_tag | ${FRONTEND_TAG:-(mantida)} |"
+            echo "| backend_tag | ${BACKEND_TAG:-(mantida)} |"
+            echo "| Resultado | ${RESULTADO} |"
+            echo ""
+            echo "Para rollback, rode este workflow novamente com a tag anterior"
+            echo "(consulte \`/opt/gini/${IN_ENVIRONMENT}/releases.log\`)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Logout do ghcr.io
+        if: always()
+        run: docker logout ghcr.io || true
