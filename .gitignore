@@ -1,0 +1,21 @@
+# ---------------------------------------------------------------------------
+# Nenhum segredo neste repositório. Os arquivos de ambiente REAIS vivem
+# somente no servidor, em /opt/gini/<env>/, modo 600 e fora do Git.
+# Aqui versionamos apenas os modelos *.example.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+images.env
+images.env.previous
+!images.env.example
+
+# Artefatos locais
+*.dump
+*.tar.gz
+releases.log
+
+# Sistema operacional / editores
+.DS_Store
+*.swp
+*~
