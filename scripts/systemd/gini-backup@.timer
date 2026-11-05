@@ -1,0 +1,28 @@
+# ---------------------------------------------------------------------------
+# gini-backup@.timer — Dispara gini-backup@<env>.service todos os dias às 03:00.
+#
+# Ativar por ambiente:
+#   systemctl enable --now gini-backup@dev.timer
+#   systemctl enable --now gini-backup@staging.timer
+#   systemctl enable --now gini-backup@production.timer
+#
+# Conferir:
+#   systemctl list-timers 'gini-backup@*'
+# ---------------------------------------------------------------------------
+[Unit]
+Description=Timer diário do backup do PostgreSQL do ambiente Gini "%i"
+Documentation=https://github.com/PI-AMS-2025-2026/banco-infra/blob/main/docs/runbook.md
+
+[Timer]
+# Todos os dias às 03:00, no fuso configurado no host (America/Sao_Paulo).
+OnCalendar=*-*-* 03:00:00
+# Persistent: se o servidor estava desligado às 03:00, roda assim que ligar.
+Persistent=true
+# Espalha o disparo em até 5 min para os três ambientes não concorrerem pelo
+# mesmo instante de I/O.
+RandomizedDelaySec=300
+AccuracySec=1min
+Unit=gini-backup@%i.service
+
+[Install]
+WantedBy=timers.target

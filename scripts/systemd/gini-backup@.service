@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# gini-backup@.service — Unidade de TEMPLATE: o trecho após o "@" é o nome do
+# ambiente e chega ao script como %i.
+#
+# Instalação (como root):
+#   install -m 0644 scripts/systemd/gini-backup@.service /etc/systemd/system/
+#   install -m 0644 scripts/systemd/gini-backup@.timer   /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now gini-backup@dev.timer
+#   systemctl enable --now gini-backup@staging.timer
+#   systemctl enable --now gini-backup@production.timer
+#
+# Execução manual (fora do horário do timer):
+#   systemctl start gini-backup@production.service
+#   journalctl -u gini-backup@production.service -n 50
+#
+# Pré-requisito: o repositório clonado em /opt/gini/infra (ver docs/runbook.md).
+# Ajuste ExecStart se você clonar em outro caminho.
+# ---------------------------------------------------------------------------
+[Unit]
+Description=Backup do PostgreSQL do ambiente Gini "%i"
+Documentation=https://github.com/PI-AMS-2025-2026/banco-infra/blob/main/docs/runbook.md
+# Sem o Docker não há banco para dumpar.
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=gha-runner
+Group=gha-runner
+WorkingDirectory=/opt/gini
+ExecStart=/opt/gini/infra/scripts/backup-db.sh %i
+# O backup é rápido, mas um banco grande pode demorar; corta em 30 min.
+TimeoutStartSec=1800
+# Reforço de isolamento: o script só precisa ler /opt/gini e falar com o Docker.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+# Os dumps vão para /opt/gini/backups/%i.
+ReadWritePaths=/opt/gini/backups
+
+[Install]
+WantedBy=multi-user.target
