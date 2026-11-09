@@ -426,7 +426,7 @@ DUMP=/opt/gini/backups/production/production-20261008-030000.dump
 
 docker run -d --name gini-teste-restore \
   -e POSTGRES_PASSWORD=teste -e POSTGRES_USER=gini -e POSTGRES_DB=gini \
-  postgres:16-alpine
+  postgres:17-alpine
 
 # esperar ficar pronto
 until docker exec gini-teste-restore pg_isready -U gini -q; do sleep 2; done
@@ -539,6 +539,10 @@ Suspeitos mais comuns:
 
 - **migration do Flyway falhou** → procure `FlywayException` nos logs;
 - `.env` com `SPRING_DATASOURCE_*` incoerente (usuário/senha/banco);
+- **faltou variável obrigatória do perfil `prod`** (`SMTP_HOST`, `SMTP_USERNAME`,
+  `SMTP_PASSWORD`, `SMTP_FROM`, `FRONTEND_URL`) → o contexto Spring falha logo
+  no início, com `Could not resolve placeholder` nos logs. O `docker compose`
+  já recusa subir se alguma estiver ausente no `.env`;
 - banco ainda subindo — o `start_period` do backend é 90 s; se o host for lento,
   aumente `HEALTH_TIMEOUT` no deploy;
 - **a imagem do backend não tem `curl` nem `wget`** — o healthcheck do compose
@@ -567,8 +571,10 @@ buildada com a URL de dev, o frontend chama a API errada. Confirme que a tag vei
 de um build da branch correta (`staging` → staging, `main` → produção) e que
 `NEXT_PUBLIC_API_URL_*` está certa no repo do frontend.
 
-Verifique também `CORS_ALLOWED_ORIGINS` no `.env` do ambiente: precisa listar a
-origem exata do frontend (esquema + host + porta).
+Verifique também `FRONTEND_URL` no `.env` do ambiente: é a origem usada no CORS
+do backend e precisa ser exatamente a do frontend (esquema + host + porta, sem
+barra final). Aceita uma única origem. Depois de alterar, rode o deploy do
+backend de novo para o container receber o valor.
 
 ### Conflito de porta ao subir
 

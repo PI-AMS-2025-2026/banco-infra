@@ -20,7 +20,7 @@
 #
 #   docker run -d --name gini-teste-restore \
 #     -e POSTGRES_PASSWORD=teste -e POSTGRES_USER=gini -e POSTGRES_DB=gini \
-#     postgres:16-alpine
+#     postgres:17-alpine
 #   docker exec -i gini-teste-restore pg_restore --clean --if-exists \
 #     -U gini -d gini < meu.dump
 #   docker rm -f gini-teste-restore

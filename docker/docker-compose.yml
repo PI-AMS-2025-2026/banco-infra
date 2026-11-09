@@ -45,7 +45,7 @@ services:
   # publicada. Acessível apenas de dentro de backend-net.
   # -------------------------------------------------------------------------
   db:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     container_name: gini-${ENV_NAME:?defina ENV_NAME (dev|staging|production) no .env}-db
     restart: unless-stopped
     environment:
@@ -87,7 +87,31 @@ services:
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?defina CORS_ALLOWED_ORIGINS no .env}
+      # Derivado de ENV_NAME (dev|staging|production) para não haver duas
+      # fontes da verdade. O backend usa o valor para compor o emissor (`iss`)
+      # dos JWT, isolando os ambientes entre si, e para bloquear o Swagger em
+      # produção. Se faltasse, o backend assumiria `production`.
+      APP_ENVIRONMENT: ${ENV_NAME}
+      # Origem do frontend. No perfil prod o backend a usa nos DOIS lugares:
+      # CORS (allowedOrigins) e link do e-mail de recuperação de senha. Por
+      # isso precisa ser a origem exata (esquema + host + porta, sem barra
+      # final). A variável CORS_ALLOWED_ORIGINS não é lida pelo backend.
+      FRONTEND_URL: ${FRONTEND_URL:?defina FRONTEND_URL no .env}
+      # SMTP do fluxo de recuperação de senha. No perfil prod o backend exige
+      # HOST, USERNAME, PASSWORD e FROM (sem padrão); sem eles não sobe.
+      # USERNAME/PASSWORD usam `?` (e não `:?`) para aceitar valor vazio quando
+      # o servidor SMTP não exige autenticação.
+      SMTP_HOST: ${SMTP_HOST:?defina SMTP_HOST no .env}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME?defina SMTP_USERNAME no .env (pode ser vazio)}
+      SMTP_PASSWORD: ${SMTP_PASSWORD?defina SMTP_PASSWORD no .env (pode ser vazio)}
+      SMTP_AUTH: ${SMTP_AUTH:-true}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_FROM: ${SMTP_FROM:?defina SMTP_FROM no .env}
+      PASSWORD_RESET_EXPIRATION_MINUTES: ${PASSWORD_RESET_EXPIRATION_MINUTES:-15}
+      # Documentação da API (Swagger). Default FECHADO; ligar apenas em dev.
+      # O backend recusa a combinação SWAGGER_ENABLED=true + production.
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-false}
     ports:
       # A porta interna é sempre 8080 (contrato entre repositórios); só a porta
       # publicada no host muda por ambiente.

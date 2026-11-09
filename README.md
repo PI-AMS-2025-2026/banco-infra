@@ -24,7 +24,7 @@ procedimentos de operação (backup, restauração, rollback).
 ## Stack
 
 - **Docker Engine** + **Docker Compose v2** no Ubuntu Server LTS (22.04 / 24.04, amd64)
-- **PostgreSQL 16** (`postgres:16-alpine`), um container por ambiente, **sem porta publicada no host**
+- **PostgreSQL 17** (`postgres:17-alpine`), um container por ambiente, **sem porta publicada no host**
 - Imagens de frontend e backend publicadas no **ghcr.io** pelas pipelines dos repos de aplicação
 - **GitHub Actions** com **self-hosted runner** instalado no próprio servidor
 
@@ -157,7 +157,16 @@ compatíveis com a versão anterior do código —
   `-slim` e distroless **não**. O frontend não tem esse requisito (usa `node -e`).
 - **Variáveis do backend:** `SPRING_PROFILES_ACTIVE=prod`,
   `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`,
-  `SPRING_DATASOURCE_PASSWORD`, `JWT_SECRET`, `CORS_ALLOWED_ORIGINS`.
+  `SPRING_DATASOURCE_PASSWORD`, `JWT_SECRET`, `APP_ENVIRONMENT` (derivada de
+  `ENV_NAME`), `FRONTEND_URL` (origem do CORS **e** base do link de
+  recuperação de senha), `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
+  `SMTP_PASSWORD`, `SMTP_AUTH`, `SMTP_STARTTLS`, `SMTP_FROM`,
+  `PASSWORD_RESET_EXPIRATION_MINUTES` e `SWAGGER_ENABLED` (padrão `false`).
+  No perfil `prod` o backend **não sobe** sem `SMTP_HOST`, `SMTP_USERNAME`,
+  `SMTP_PASSWORD`, `SMTP_FROM` e `FRONTEND_URL`. O backend não lê mais
+  `CORS_ALLOWED_ORIGINS`.
+- **Versão do PostgreSQL:** a major é a **17**, a mesma do compose de
+  desenvolvimento e do CI do backend. Ao mudar, altere os três lugares.
 - **Nos repos de aplicação:** secret `INFRA_DISPATCH_TOKEN`, variable
   `INFRA_REPOSITORY` (`owner/repo`).
 
