@@ -25,6 +25,7 @@ procedimentos de operação (backup, restauração, rollback).
 
 - **Docker Engine** + **Docker Compose v2** no Ubuntu Server LTS (22.04 / 24.04, amd64)
 - **PostgreSQL 17** (`postgres:17-alpine`), um container por ambiente, **sem porta publicada no host**
+- **Mailpit** (`axllent/mailpit`), opcional e só em `dev`/`staging`: caixa de entrada de teste para o e-mail de recuperação de senha, com a interface web presa a `127.0.0.1` ([ADR-011](docs/decisoes-tecnicas.md#adr-011--mailpit-opcional-perfil-mailpit-em-dev-e-staging))
 - Imagens de frontend e backend publicadas no **ghcr.io** pelas pipelines dos repos de aplicação
 - **GitHub Actions** com **self-hosted runner** instalado no próprio servidor
 
@@ -162,6 +163,8 @@ compatíveis com a versão anterior do código —
   recuperação de senha), `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
   `SMTP_PASSWORD`, `SMTP_AUTH`, `SMTP_STARTTLS`, `SMTP_FROM`,
   `PASSWORD_RESET_EXPIRATION_MINUTES` e `SWAGGER_ENABLED` (padrão `false`).
+  Em dev e staging o SMTP aponta para o Mailpit (`SMTP_HOST=mailpit`); em
+  production é obrigatório um SMTP real.
   No perfil `prod` o backend **não sobe** sem `SMTP_HOST`, `SMTP_USERNAME`,
   `SMTP_PASSWORD`, `SMTP_FROM` e `FRONTEND_URL`. O backend não lê mais
   `CORS_ALLOWED_ORIGINS`.

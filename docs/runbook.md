@@ -47,6 +47,12 @@ pressupõe acesso SSH ao servidor Ubuntu local.
 | staging | `gini-staging` | `3002` | `8082` | sem porta publicada |
 | production | `gini-production` | `3000` | `8080` | sem porta publicada |
 
+Em **dev** e **staging**, o `.env` também liga o Mailpit (perfil `mailpit`),
+uma caixa de entrada de teste para o e-mail de recuperação de senha. Ele não
+publica SMTP e expõe a interface web só em `127.0.0.1`
+(`8025` em dev, `8026` em staging) — ver [§10.1](#101-ler-os-e-mails-de-teste-mailpit).
+Em production não existe.
+
 Comando canônico (sempre de dentro de `/opt/gini/<env>/`):
 
 ```bash
@@ -327,7 +333,8 @@ O que o `deploy.sh` faz, em ordem:
 8. `docker compose up -d --remove-orphans`;
 9. espera `db`, `backend` e `frontend` ficarem `healthy` (até `HEALTH_TIMEOUT`),
    confere `/actuator/health` e `/api/health` nas portas publicadas e procura a
-   confirmação do Flyway nos logs (ausência = **aviso**, não falha);
+   confirmação do Flyway nos logs (ausência = **aviso**, não falha). Se o
+   Mailpit estiver ligado, confere a saúde dele, também só com **aviso**;
 10. em falha: imprime `logs --tail=100`, faz rollback e sai com código ≠ 0;
 11. em sucesso: grava `releases.log`, marca `.deploy-ok` e roda
     `docker image prune -f`.
@@ -504,6 +511,30 @@ Os logs de container já têm rotação (`json-file`, `max-size 10m`,
 
 ---
 
+### 10.1 Ler os e-mails de teste (Mailpit)
+
+Em dev e staging o backend envia o e-mail de recuperação de senha ao Mailpit, que
+o captura sem entregar a ninguém. A interface web só escuta em `127.0.0.1` do
+servidor; acesse pelo seu computador com um túnel SSH:
+
+```bash
+# dev (8025) — para staging troque por 8026
+ssh -L 8025:127.0.0.1:8025 <usuario>@<servidor>
+# depois abra http://localhost:8025
+```
+
+Ou direto no servidor:
+
+```bash
+docker compose -p gini-dev --env-file .env --env-file images.env \
+  -f docker-compose.yml logs --tail=50 mailpit
+```
+
+As mensagens ficam em memória e somem quando o container é recriado. Para trocar
+por SMTP real num ambiente, apague `COMPOSE_PROFILES` do `.env`, ajuste os
+`SMTP_*` e rode o deploy do backend; o container antigo do Mailpit é removido
+pelo `--remove-orphans`.
+
 ## 11. Troubleshooting
 
 ### O job fica em "Waiting for a runner"
@@ -563,6 +594,18 @@ Suspeitos mais comuns:
 
   O **frontend** não tem esse problema: o healthcheck dele usa o próprio
   `node -e` com `fetch`, que existe em qualquer imagem Next.js.
+
+### Recuperação de senha não envia e-mail (dev/staging)
+
+1. O `.env` precisa ter `COMPOSE_PROFILES=mailpit`, `SMTP_HOST=mailpit` e
+   `SMTP_PORT=1025`. Confirme que o container existe:
+   `docker ps --filter name=gini-<env>-mailpit`.
+2. Se `SMTP_HOST` apontar para um servidor real, o e-mail não aparece no
+   Mailpit — vai para esse servidor.
+3. Com `SMTP_AUTH=true` o Mailpit recusa a conexão; use `false` (e
+   `SMTP_STARTTLS=false`).
+4. `deploy.sh` abortou citando `COMPOSE_PROFILES=mailpit` → o ambiente é
+   `production`; remova a linha e configure um SMTP real.
 
 ### Frontend `healthy` mas a tela não carrega dados
 

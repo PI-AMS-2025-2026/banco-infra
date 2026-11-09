@@ -70,6 +70,41 @@ services:
       br.fatec.gini.service: db
 
   # -------------------------------------------------------------------------
+  # Mailpit — caixa de entrada de TESTE para o fluxo de recuperação de senha.
+  # Só sobe com o perfil `mailpit` (COMPOSE_PROFILES=mailpit no .env), previsto
+  # para dev e staging. NUNCA em production: o Mailpit captura as mensagens e
+  # não entrega nenhuma, então os e-mails reais dos usuários seriam engolidos
+  # (o deploy.sh recusa essa combinação).
+  #
+  # - O SMTP (1025) não é publicado: só o backend o alcança, via backend-net,
+  #   usando SMTP_HOST=mailpit.
+  # - A interface web fica presa a 127.0.0.1 do servidor. Ela mostra todos os
+  #   e-mails (inclusive links de redefinição de senha) e não tem login, e uma
+  #   porta publicada contorna o UFW. Acesso pelo seu computador via túnel SSH:
+  #     ssh -L 8025:127.0.0.1:8025 <usuario>@<servidor>   ->  http://localhost:8025
+  # - As mensagens ficam em memória: somem quando o container é recriado.
+  # -------------------------------------------------------------------------
+  mailpit:
+    image: axllent/mailpit:v1.27
+    profiles: ["mailpit"]
+    container_name: gini-${ENV_NAME}-mailpit
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MAILPIT_WEB_PORT:-8025}:8025"
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *logging
+    labels:
+      br.fatec.gini.environment: ${ENV_NAME}
+      br.fatec.gini.service: mailpit
+
+  # -------------------------------------------------------------------------
   # Backend — Java 21 + Spring Boot. Aplica as migrations do Flyway no startup,
   # por isso o start_period do healthcheck é generoso (90s).
   # -------------------------------------------------------------------------

@@ -304,3 +304,32 @@ na organização), com o rótulo `gini-local`.
 - Se o servidor estiver fora do ar, não há deploy — o contorno é rodar
   `scripts/deploy.sh` por SSH
   ([runbook](runbook.md#53-deploy-manual-direto-no-servidor-contorno)).
+
+---
+
+## ADR-011 — Mailpit opcional (perfil `mailpit`) em dev e staging
+
+**Status:** Aceita · **Data:** 2026-11-09
+
+**Contexto.** O backend, no perfil `prod`, exige um SMTP para o e-mail de
+recuperação de senha e não sobe sem ele. Nesta fase não há servidor SMTP nem
+provedor contratado (ADR-007), e dev/staging não devem enviar e-mail de verdade.
+
+**Decisão.** O serviço `mailpit` (`axllent/mailpit`, mesma versão do compose do
+backend) existe no compose único, atrás do perfil Compose `mailpit`. Cada
+ambiente liga com `COMPOSE_PROFILES=mailpit` no seu `.env`: os `.env.example` de
+`dev` e `staging` já vêm assim; o de `production` não.
+
+**Consequências.**
+
+- O SMTP (`1025`) não é publicado: só o backend o alcança, por `backend-net`.
+- A interface web é publicada **apenas em `127.0.0.1`** do servidor. Ela exibe
+  todos os e-mails (inclusive links de redefinição de senha), não tem login, e
+  portas publicadas pelo Docker contornam o UFW. O acesso é por túnel SSH.
+- As mensagens ficam em memória e somem quando o container é recriado.
+- Em `production` o Mailpit é proibido: capturaria e-mails de usuários reais sem
+  entregá-los. O `deploy.sh` aborta se encontrar o perfil nesse ambiente.
+- Mailpit com problema gera apenas aviso no deploy; não causa rollback, porque o
+  backend não depende dele para subir.
+- Para usar SMTP real em dev/staging, basta apagar `COMPOSE_PROFILES` e trocar os
+  `SMTP_*`. `production` exige SMTP real, ainda não definido pelo grupo.
