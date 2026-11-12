@@ -148,13 +148,19 @@ Leia [`seguranca-runner.md`](seguranca-runner.md) antes.
 cd /opt/gini/infra
 read -rs RUNNER_TOKEN && export RUNNER_TOKEN
 
-# 3. Instalar
-sudo -E REPO_URL=https://github.com/PI-AMS-2025-2026/banco-infra \
+# 3. Instalar (as variáveis são passadas explicitamente: em alguns servidores
+#    o sudo ignora o -E e o script falharia com "RUNNER_TOKEN não informado")
+sudo REPO_URL=https://github.com/PI-AMS-2025-2026/banco-infra \
+     RUNNER_TOKEN="$RUNNER_TOKEN" \
      ./scripts/install-runner.sh
 
 # 4. Limpar o token da sessão
 unset RUNNER_TOKEN
 ```
+
+> O `read -rs` não mostra nada enquanto você digita: ele está esperando o token.
+> Cole o token (nada aparece na tela) e aperte Enter. Para conferir sem expor o
+> valor: `[ -n "$RUNNER_TOKEN" ] && echo "definido (${#RUNNER_TOKEN} caracteres)"`.
 
 ### 3.1 Validar
 
@@ -170,7 +176,8 @@ rótulos `self-hosted`, `linux`, `x64`, `gini-local`.
 
 ```bash
 read -rs RUNNER_TOKEN && export RUNNER_TOKEN
-sudo -E REPO_URL=https://github.com/PI-AMS-2025-2026/banco-infra \
+sudo REPO_URL=https://github.com/PI-AMS-2025-2026/banco-infra \
+     RUNNER_TOKEN="$RUNNER_TOKEN" \
      RUNNER_VERSION=2.338.0 \
      RUNNER_SHA256=af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32 \
      ./scripts/install-runner.sh --reconfigure
@@ -181,6 +188,37 @@ Ao trocar a versão, pegue **versão e checksum juntos** em
 <https://github.com/actions/runner/releases> — nunca estime o hash.
 
 Remoção do runner: seção 3 de [`seguranca-runner.md`](seguranca-runner.md#3-remoção-do-runner).
+
+### 3.3 Problemas comuns na instalação do runner
+
+**`sudo: preserving the entire environment is not supported, '-E' is ignored`
+seguido de `RUNNER_TOKEN não informado`**
+O sudo do servidor descarta o ambiente. Passe `RUNNER_TOKEN="$RUNNER_TOKEN"` na
+própria linha do `sudo`, como na seção 3.
+
+**`Failed: Must run from runner root or install is corrupt`**
+O registro já deu certo (`Runner successfully added`); só a instalação do
+serviço falhou, porque o `svc.sh` precisa rodar de dentro de `/opt/gini/runner`.
+Não gere outro token. Instale o serviço à mão:
+
+```bash
+cd /opt/gini/runner
+sudo ./svc.sh install gha-runner
+sudo ./svc.sh start
+sudo ./svc.sh status
+```
+
+Depois valide como na seção 3.1.
+
+**`E: Unable to locate package libicu80` / `libicu79`**
+O script tenta algumas versões do `libicu` e só uma existe em cada release do
+Ubuntu; o aviso é inofensivo se o runner iniciar. Se o runner reclamar de ICU
+(`Couldn't find a valid ICU package`), instale a versão disponível:
+
+```bash
+apt-cache search libicu | grep -E '^libicu[0-9]+ '
+sudo apt-get install -y libicu<versão>   # ex.: libicu74 no Ubuntu 24.04
+```
 
 ---
 
