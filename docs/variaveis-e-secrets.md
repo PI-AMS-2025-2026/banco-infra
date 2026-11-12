@@ -87,7 +87,12 @@ Arquivo: `/opt/gini/<env>/.env` — criado **à mão**, modo `600`, dono
 `gha-runner`, **fora do Git**. Modelos versionados:
 `environments/<env>/.env.example`.
 
-O `deploy.sh` aborta se o modo não for `600` ou se ainda houver `CHANGE_ME`.
+O `deploy.sh` aborta se o modo não for `600` ou se ainda houver `CHANGE_ME`
+(inclusive em linhas comentadas).
+
+> **`CORS_ALLOWED_ORIGINS` foi removida.** O backend, no perfil `prod`, não a
+> lê: a origem do CORS vem de `FRONTEND_URL`. Se o `.env` de um servidor ainda
+> tiver a linha, ela é ignorada e pode ser apagada.
 
 | Nome | Finalidade | Exemplo fictício (dev / staging / production) |
 | --- | --- | --- |
@@ -100,7 +105,18 @@ O `deploy.sh` aborta se o modo não for `600` ou se ainda houver `CHANGE_ME`.
 | `POSTGRES_USER` | Usuário do PostgreSQL. | `gini_dev` / `gini_staging` / `gini_production` |
 | `POSTGRES_PASSWORD` | Senha do PostgreSQL. **Diferente em cada ambiente.** Gere com `openssl rand -base64 32`. | `cGFzc3dvcmQtZmljdGljaWEtbmFvLXVzZQ==` |
 | `JWT_SECRET` | Segredo de assinatura dos JWT do backend. **Diferente em cada ambiente.** Gere com `openssl rand -base64 48`. | `and0LXNlY3JldC1maWN0aWNpby1uYW8tdXNlLWVtLXByb2Q=` |
-| `CORS_ALLOWED_ORIGINS` | Origens aceitas pelo CORS do backend. Lista separada por vírgula, sem espaços. | `http://192.168.0.10:3001` / `http://192.168.0.10:3002` / `http://192.168.0.10:3000` |
+| `FRONTEND_URL` | URL pública do frontend do ambiente: esquema + host + porta, **sem barra final e sem caminho**. O backend a usa como origem do CORS **e** como base do link do e-mail de recuperação de senha. Aceita **uma única** origem. **Obrigatória.** | `http://192.168.0.10:3001` / `http://192.168.0.10:3002` / `http://192.168.0.10:3000` |
+| `SMTP_HOST` | Servidor SMTP do e-mail de recuperação de senha. **Obrigatória** (o backend não sobe sem ela). Em dev/staging com Mailpit: `mailpit` (porta `1025`, `SMTP_AUTH=false`, `SMTP_STARTTLS=false`, usuário e senha vazios). | `smtp.exemplo.com.br` |
+| `SMTP_PORT` | Porta do SMTP. Opcional; padrão `587`. | `587` |
+| `SMTP_AUTH` | Se o SMTP exige autenticação. Opcional; padrão `true`. | `true` |
+| `SMTP_STARTTLS` | Se usa STARTTLS. Opcional; padrão `true`. | `true` |
+| `SMTP_USERNAME` | Usuário do SMTP. **Obrigatória** (pode ser vazia se `SMTP_AUTH=false`). | `usuario-ficticio` |
+| `SMTP_PASSWORD` | Senha do SMTP. **Obrigatória** (pode ser vazia se `SMTP_AUTH=false`). Segredo: diferente em cada ambiente quando possível. | `senha-ficticia-nao-use` |
+| `SMTP_FROM` | Remetente dos e-mails. **Obrigatória**; precisa ser aceito pelo provedor. | `noreply@exemplo.com.br` |
+| `PASSWORD_RESET_EXPIRATION_MINUTES` | Validade do link de recuperação de senha. Opcional; padrão `15`. | `15` |
+| `COMPOSE_PROFILES` | Perfis do Compose a ativar. `mailpit` sobe a caixa de entrada de teste (ADR-011). Presente nos `.env.example` de dev e staging; **proibida em production** (o `deploy.sh` aborta). Opcional. | `mailpit` |
+| `MAILPIT_WEB_PORT` | Porta da interface web do Mailpit, publicada **somente em `127.0.0.1`** do servidor. Diferente por ambiente. Opcional; padrão `8025`. Só tem efeito com `COMPOSE_PROFILES=mailpit`. | `8025` / `8026` |
+| `SWAGGER_ENABLED` | Publica o Swagger UI e `/v3/api-docs`. Opcional; padrão `false`. Ligar **apenas em dev**: as rotas ficam sem autenticação e não há proxy reverso nesta fase (ADR-007). Com `ENV_NAME=production` o backend recusa `true`. | `false` |
 | `BACKUP_RETENTION_DAYS` | Dias de retenção dos dumps em `/opt/gini/backups/<env>`. Opcional; padrão `7`. | `7` / `7` / `14` |
 
 ### 4.1 Variáveis derivadas (não se escreve no `.env`)
@@ -114,7 +130,8 @@ Montadas pelo `docker/docker-compose.yml` a partir das acima:
 | `SPRING_DATASOURCE_USERNAME` | `${POSTGRES_USER}` |
 | `SPRING_DATASOURCE_PASSWORD` | `${POSTGRES_PASSWORD}` |
 | `JWT_SECRET` | `${JWT_SECRET}` |
-| `CORS_ALLOWED_ORIGINS` | `${CORS_ALLOWED_ORIGINS}` |
+| `APP_ENVIRONMENT` | `${ENV_NAME}` — compõe o emissor (`iss`) dos JWT e isola os ambientes; mudar o valor invalida os tokens já emitidos |
+| `FRONTEND_URL`, `SMTP_*`, `PASSWORD_RESET_EXPIRATION_MINUTES`, `SWAGGER_ENABLED` | repassadas como estão, com os padrões da tabela acima |
 | `NODE_ENV` / `PORT` (frontend) | fixos em `production` / `3000` |
 | `POSTGRES_INITDB_ARGS` (db) | fixo em `--encoding=UTF8 --locale=C` |
 

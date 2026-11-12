@@ -218,26 +218,35 @@ Ubuntu local. Ficam explicitamente **fora do escopo**:
 
 ---
 
-## ADR-008 — PostgreSQL 16 (`postgres:16-alpine`)
+## ADR-008 — PostgreSQL 17 (`postgres:17-alpine`)
 
-**Status:** Aceita · **Data:** 2026-10-08 · **Revisar quando:** o backend
-declarar dependência de recurso de outra major
+**Status:** Aceita (revisada em 2026-11-09: 16 → 17) · **Data:** 2026-10-08 ·
+**Revisar quando:** o backend declarar dependência de recurso de outra major
 
-**Contexto.** O projeto não fixou a versão do PostgreSQL em nenhum documento.
-Era preciso escolher uma para o compose.
+**Contexto.** O projeto não fixou a versão do PostgreSQL em nenhum documento e
+a primeira escolha foi a 16. Depois, o compose de desenvolvimento e o CI do
+backend (`backend-java`) passaram a usar a 17, e as migrations do Flyway eram
+validadas numa major diferente da que roda nos ambientes hospedados.
 
-**Decisão.** `postgres:16-alpine`, com a major **fixada** (nunca `postgres:latest`).
+**Decisão.** `postgres:17-alpine`, com a major **fixada** (nunca
+`postgres:latest`) e **igual à do backend** (compose local e job
+`migrations-postgres` do CI). Ao mudar a major, altere os três lugares juntos.
 
 **Consequências.**
 
 - Versão estável, amplamente suportada pelo driver JDBC e pelo Flyway.
 - `-alpine` reduz o tamanho da imagem.
-- Trocar de major (16 → 17) **não** é transparente: o diretório de dados não é
+- Trocar de major (16 → 17, por exemplo) **não** é transparente: o diretório de dados não é
   compatível. A troca exige `pg_dump` na major antiga, recriar o volume e
   restaurar — procedimento que precisa de janela planejada.
 - `POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale=C` mantém o locale previsível
   entre ambientes e recriações de volume.
-- **Confirme com o grupo** se alguma dependência do backend exige outra major.
+- **Ambientes já criados com a 16:** o container `db` 17 não sobe sobre o
+  volume da 16 (`database files are incompatible with server`). Migração por
+  ambiente, com janela planejada: `scripts/backup-db.sh <env>` → parar o
+  ambiente → remover o volume `gini-<env>_db-data` → subir a 17 → restaurar
+  com `scripts/restore-db.sh`. O dump em formato custom (`-Fc`) feito na 16
+  restaura na 17. Ambientes ainda sem volume não precisam de nada.
 
 ---
 
@@ -295,3 +304,32 @@ na organização), com o rótulo `gini-local`.
 - Se o servidor estiver fora do ar, não há deploy — o contorno é rodar
   `scripts/deploy.sh` por SSH
   ([runbook](runbook.md#53-deploy-manual-direto-no-servidor-contorno)).
+
+---
+
+## ADR-011 — Mailpit opcional (perfil `mailpit`) em dev e staging
+
+**Status:** Aceita · **Data:** 2026-11-09
+
+**Contexto.** O backend, no perfil `prod`, exige um SMTP para o e-mail de
+recuperação de senha e não sobe sem ele. Nesta fase não há servidor SMTP nem
+provedor contratado (ADR-007), e dev/staging não devem enviar e-mail de verdade.
+
+**Decisão.** O serviço `mailpit` (`axllent/mailpit`, mesma versão do compose do
+backend) existe no compose único, atrás do perfil Compose `mailpit`. Cada
+ambiente liga com `COMPOSE_PROFILES=mailpit` no seu `.env`: os `.env.example` de
+`dev` e `staging` já vêm assim; o de `production` não.
+
+**Consequências.**
+
+- O SMTP (`1025`) não é publicado: só o backend o alcança, por `backend-net`.
+- A interface web é publicada **apenas em `127.0.0.1`** do servidor. Ela exibe
+  todos os e-mails (inclusive links de redefinição de senha), não tem login, e
+  portas publicadas pelo Docker contornam o UFW. O acesso é por túnel SSH.
+- As mensagens ficam em memória e somem quando o container é recriado.
+- Em `production` o Mailpit é proibido: capturaria e-mails de usuários reais sem
+  entregá-los. O `deploy.sh` aborta se encontrar o perfil nesse ambiente.
+- Mailpit com problema gera apenas aviso no deploy; não causa rollback, porque o
+  backend não depende dele para subir.
+- Para usar SMTP real em dev/staging, basta apagar `COMPOSE_PROFILES` e trocar os
+  `SMTP_*`. `production` exige SMTP real, ainda não definido pelo grupo.

@@ -199,6 +199,19 @@ BACKEND_PORT="$(ler_variavel_env "${ARQUIVO_ENV}" BACKEND_PORT)"
 [[ "${FRONTEND_PORT}" =~ ^[0-9]{1,5}$ && "${BACKEND_PORT}" =~ ^[0-9]{1,5}$ ]] \
   || morrer "FRONTEND_PORT/BACKEND_PORT inválidos em ${ARQUIVO_ENV}."
 
+# Mailpit (opcional): sobe quando COMPOSE_PROFILES do .env contém `mailpit`.
+# Em production ele engoliria os e-mails reais dos usuários, então é recusado.
+COMPOSE_PROFILES_ENV="$(ler_variavel_env "${ARQUIVO_ENV}" COMPOSE_PROFILES)"
+USA_MAILPIT=0
+if [[ ",${COMPOSE_PROFILES_ENV// /}," == *",mailpit,"* ]]; then
+  USA_MAILPIT=1
+  [[ "${ENV_NAME}" != "production" ]] \
+    || morrer "COMPOSE_PROFILES=mailpit em ${ARQUIVO_ENV}: o Mailpit não pode rodar em production (os e-mails dos usuários não seriam entregues). Remova a linha e use um SMTP real."
+  MAILPIT_WEB_PORT="$(ler_variavel_env "${ARQUIVO_ENV}" MAILPIT_WEB_PORT)"
+  [[ -z "${MAILPIT_WEB_PORT}" || "${MAILPIT_WEB_PORT}" =~ ^[0-9]{1,5}$ ]] \
+    || morrer "MAILPIT_WEB_PORT inválida em ${ARQUIVO_ENV}."
+fi
+
 # --------------------------------------------------------------------------- #
 # Atalhos
 # --------------------------------------------------------------------------- #
@@ -434,6 +447,18 @@ if ! verificar_endpoints; then
 fi
 
 verificar_flyway
+
+# O Mailpit é ferramenta de teste: se não estiver saudável, avisa, mas não
+# derruba nem reverte o deploy (o backend não depende dele para subir).
+if [[ "${USA_MAILPIT}" -eq 1 ]]; then
+  estado_mailpit="$(compose ps --format '{{.Service}} {{.Health}}' 2>/dev/null \
+                    | awk '$1=="mailpit"{print $2}' | head -n1)"
+  if [[ "${estado_mailpit}" == "healthy" ]]; then
+    ok "mailpit healthy (interface em 127.0.0.1:${MAILPIT_WEB_PORT:-8025}, acesso por túnel SSH)"
+  else
+    aviso "mailpit não está healthy (estado: ${estado_mailpit:-ausente}); e-mails de teste podem não ser capturados."
+  fi
+fi
 
 # --------------------------------------------------------------------------- #
 # 10. Sucesso — marcar, registrar e limpar
