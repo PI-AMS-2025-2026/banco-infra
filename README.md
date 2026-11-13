@@ -144,9 +144,12 @@ compatíveis com a versão anterior do código —
 ## Contrato entre repositórios
 
 - **Registry:** `ghcr.io/<owner>/<nome-do-repo>`, em minúsculas.
-- **Tags publicadas:** `sha-<7 chars>` (imutável, usada nos deploys), nome da
-  branch (`dev`/`staging`/`main`, mutável), `X.Y.Z` e `X.Y` quando houver tag
-  git `vX.Y.Z`, e `latest` somente a partir de `main`.
+- **Tags publicadas:** tag imutável usada nos deploys — `sha-<7 chars>` no
+  backend e `sha-<7 chars>-<ambiente>` no frontend (`dev`/`staging`/`production`,
+  porque a URL da API é embutida no build; ver
+  [ADR-003](docs/decisoes-tecnicas.md#adr-003--deploy-sempre-por-tag-imutável-sha-7)) —,
+  nome da branch (`dev`/`staging`/`main`, mutável), `X.Y.Z` e `X.Y` quando
+  houver tag git `vX.Y.Z`, e `latest` somente a partir de `main`.
 - **Dispatch:** só a branch `dev` envia `repository_dispatch` para este
   repositório — `event_type: image-published`, `client_payload: { service, tag,
   sha, branch }`.

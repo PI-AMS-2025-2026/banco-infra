@@ -17,7 +17,7 @@ Como uma mudança de código nos repositórios de aplicação chega ao servidor.
                │                                       │
                ▼                                       ▼
    job: build-release-images  ──── publica ───▶  ghcr.io/<owner>/<repo>
-               │                                  tags: sha-<7>, <branch>,
+               │                                  tags: sha-<7>[-<env>]¹, <branch>,
                │                                        X.Y.Z, X.Y, latest
                │
                │  SOMENTE na branch `dev`
@@ -44,6 +44,10 @@ Como uma mudança de código nos repositórios de aplicação chega ao servidor.
    .github/workflows/deploy.yml  ──▶  scripts/deploy.sh staging|production
 ```
 
+¹ O backend publica `sha-<7>`; o frontend publica `sha-<7>-<env>` (`dev`,
+`staging` ou `production`), porque a URL da API é embutida no build — ver
+[ADR-003](decisoes-tecnicas.md#adr-003--deploy-sempre-por-tag-imutável-sha-7).
+
 ---
 
 ## 2. Contrato do payload
@@ -58,6 +62,7 @@ branch `dev`:
   "client_payload": {
     "service": "backend",      // "frontend" | "backend"
     "tag": "sha-a1b2c3d",      // tag imutável publicada no ghcr.io
+                               // (frontend: "sha-a1b2c3d-dev")
     "sha": "a1b2c3d4e5f6...",  // commit completo (informativo)
     "branch": "dev"            // precisa ser "dev"
   }
@@ -95,6 +100,7 @@ documentação do contrato:
     GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
     INFRA_REPOSITORY: ${{ vars.INFRA_REPOSITORY }}
     TAG: sha-${{ github.sha }}   # já truncado para 7 caracteres no job de build
+                                 # (o frontend acrescenta o ambiente: sha-<7>-dev)
   run: |
     gh api "repos/${INFRA_REPOSITORY}/dispatches" \
       -f event_type=image-published \
@@ -156,8 +162,9 @@ branch padrão** (`main`) deste repositório. Consequências práticas:
 2. Preencha:
    - `environment`: `staging` ou `production`;
    - `service`: `frontend`, `backend` ou `both`;
-   - `frontend_tag` e/ou `backend_tag`: a tag publicada no ghcr.io
-     (ex.: `sha-a1b2c3d`).
+   - `frontend_tag` e/ou `backend_tag`: a tag publicada no ghcr.io.
+     Backend: `sha-a1b2c3d`. Frontend: com o sufixo **do ambiente de destino**
+     (ex.: `sha-a1b2c3d-staging` ou `sha-a1b2c3d-production`).
 3. **Run workflow**.
 4. Com `environment=production`, o job entra em **Waiting** com o aviso
    *"Review pending deployments"*. Um revisor precisa clicar em **Approve and
@@ -177,7 +184,7 @@ gh workflow run deploy.yml \
 # produção, os dois serviços com tags distintas
 gh workflow run deploy.yml \
   -f environment=production -f service=both \
-  -f frontend_tag=sha-a1b2c3d -f backend_tag=sha-9f8e7d6
+  -f frontend_tag=sha-a1b2c3d-production -f backend_tag=sha-9f8e7d6
 
 # acompanhar
 gh run watch
@@ -301,7 +308,7 @@ apenas reporta a falha.
    ```bash
    gh workflow run deploy.yml \
      -f environment=production -f service=both \
-     -f frontend_tag=sha-ANTERIOR -f backend_tag=sha-ANTERIOR
+     -f frontend_tag=sha-ANTERIOR-production -f backend_tag=sha-ANTERIOR
    ```
 
 3. Aprove o deployment, se `production` exigir revisor.

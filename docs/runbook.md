@@ -293,6 +293,10 @@ gh workflow run deploy.yml \
 Para `production`, use tags vindas de builds da branch `main` e aprove o
 deployment pendente.
 
+Formato das tags imutáveis: backend `sha-<7>`; frontend `sha-<7>-<ambiente>`
+(ex.: `sha-a1b2c3d-staging`). Nunca use no frontend a tag de outro ambiente: a
+URL da API vem embutida na imagem.
+
 ### 5.3 Deploy manual direto no servidor (contorno)
 
 Útil se o runner estiver fora do ar:
@@ -396,7 +400,7 @@ cat /opt/gini/production/images.env.previous
 # 2. Rodar o deploy com a tag anterior
 gh workflow run deploy.yml \
   -f environment=production -f service=both \
-  -f frontend_tag=sha-ANTERIOR -f backend_tag=sha-ANTERIOR
+  -f frontend_tag=sha-ANTERIOR-production -f backend_tag=sha-ANTERIOR
 ```
 
 ### 7.3 Atenção: rollback não reverte o banco

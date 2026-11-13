@@ -7,7 +7,8 @@
 #
 # Contrato do client_payload (ver docs/estrategia-gatilhos.md):
 #   service : "frontend" | "backend"
-#   tag     : tag da imagem publicada (ex.: sha-a1b2c3d)
+#   tag     : tag da imagem publicada (backend: sha-a1b2c3d;
+#             frontend: sha-a1b2c3d-dev)
 #   sha     : commit completo (informativo)
 #   branch  : precisa ser "dev"
 #

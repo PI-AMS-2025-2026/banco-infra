@@ -11,7 +11,7 @@
 #   ou:
 #     gh workflow run deploy.yml \
 #       -f environment=staging -f service=both \
-#       -f frontend_tag=sha-1111111 -f backend_tag=sha-2222222
+#       -f frontend_tag=sha-1111111-staging -f backend_tag=sha-2222222
 #
 # ROLLBACK: rode este mesmo workflow informando a tag anterior
 # (consulte /opt/gini/<env>/releases.log no servidor). Ver docs/runbook.md.
@@ -43,7 +43,7 @@ on:
           - backend
           - both
       frontend_tag:
-        description: "Tag da imagem do frontend (ex.: sha-a1b2c3d). Obrigatória se service = frontend ou both."
+        description: "Tag da imagem do frontend, com o sufixo do ambiente (ex.: sha-a1b2c3d-staging). Obrigatória se service = frontend ou both."
         required: false
         type: string
       backend_tag:

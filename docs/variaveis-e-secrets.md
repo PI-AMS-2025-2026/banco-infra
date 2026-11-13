@@ -145,7 +145,7 @@ para `images.env.previous`, que é a base do rollback automático.
 
 | Nome | Finalidade | Exemplo fictício |
 | --- | --- | --- |
-| `FRONTEND_TAG` | Tag da imagem do frontend em uso. | `sha-a1b2c3d` |
+| `FRONTEND_TAG` | Tag da imagem do frontend em uso. Sempre com o sufixo do ambiente. | `sha-a1b2c3d-dev` |
 | `BACKEND_TAG` | Tag da imagem do backend em uso. | `sha-9f8e7d6` |
 
 Tags padrão do **primeiro** deploy (quando o arquivo ainda não existe):
@@ -222,7 +222,8 @@ A publicação no ghcr.io usa o `GITHUB_TOKEN` do próprio repo de aplicação c
 > O frontend é **buildado por ambiente** porque `NEXT_PUBLIC_*` é embutido no
 > bundle. Por isso a imagem de staging precisa vir de um build da branch
 > `staging`, e a de produção, de um build da `main` — nunca reaproveite a tag de
-> um ambiente em outro.
+> um ambiente em outro. Para evitar isso, a tag imutável do frontend carrega o
+> ambiente: `sha-<7>-dev`, `sha-<7>-staging`, `sha-<7>-production`.
 
 ---
 

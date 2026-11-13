@@ -85,6 +85,20 @@ primeiro deploy** de um ambiente, quando ainda não existe `images.env`
 - Custo: quem dispara um deploy manual precisa copiar a tag de algum lugar
   (Actions do repo de aplicação, ou a aba *Packages*).
 
+**Atualização (2026-11-13) — sufixo de ambiente no frontend.** A imagem do
+frontend embute `NEXT_PUBLIC_API_URL` no build, então cada ambiente tem uma
+imagem diferente. Um mesmo commit pode ser buildado em mais de uma branch
+(fast-forward ou rebase-merge de `dev` para `staging`/`main`); com só
+`sha-<7>`, o segundo build **sobrescreveria** a tag com outra URL embutida, e
+a tag deixaria de ser imutável na prática. Por isso o frontend publica
+`sha-<7>-<ambiente>` (ex.: `sha-a1b2c3d-dev`, `sha-a1b2c3d-staging`,
+`sha-a1b2c3d-production`). O backend continua em `sha-<7>`: sua imagem é a
+mesma em todos os ambientes. Nenhuma mudança de código foi necessária aqui —
+a regex `^[A-Za-z0-9_.-]{1,128}$` já aceita o novo formato.
+
+- Ao fazer deploy manual do frontend, use **sempre** a tag do ambiente de
+  destino (`-staging` para staging, `-production` para production).
+
 ---
 
 ## ADR-004 — Três ambientes no mesmo host, isolados por projeto Compose

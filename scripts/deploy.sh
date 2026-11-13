@@ -8,7 +8,7 @@
 #
 # Uso:
 #   BACKEND_TAG=sha-a1b2c3d ./scripts/deploy.sh dev
-#   FRONTEND_TAG=sha-1111111 BACKEND_TAG=sha-2222222 ./scripts/deploy.sh staging
+#   FRONTEND_TAG=sha-1111111-staging BACKEND_TAG=sha-2222222 ./scripts/deploy.sh staging
 #
 # ENTRADAS — todas por variável de ambiente; nenhum valor externo é interpolado
 # em comando sem passar pelas validações de regex abaixo.
