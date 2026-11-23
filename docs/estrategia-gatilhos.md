@@ -44,9 +44,13 @@ Como uma mudança de código nos repositórios de aplicação chega ao servidor.
    .github/workflows/deploy.yml  ──▶  scripts/deploy.sh staging|production
 ```
 
-¹ O backend publica `sha-<7>`; o frontend publica `sha-<7>-<env>` (`dev`,
-`staging` ou `production`), porque a URL da API é embutida no build — ver
-[ADR-003](decisoes-tecnicas.md#adr-003--deploy-sempre-por-tag-imutável-sha-7).
+¹ O backend publica `sha-<7>`. O frontend está em transição
+([ADR-012](decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)):
+a **imagem única** `sha-<7>` recebe a URL da API por `API_URL` em runtime e é a
+mesma nos três ambientes; o formato **legado** `sha-<7>-<env>` (`dev`,
+`staging` ou `production`) embute a URL no build
+([ADR-003](decisoes-tecnicas.md#adr-003--deploy-sempre-por-tag-imutável-sha-7)).
+Os workflows e o `deploy.sh` aceitam os dois até a Fase B.
 
 ---
 
@@ -62,7 +66,8 @@ branch `dev`:
   "client_payload": {
     "service": "backend",      // "frontend" | "backend"
     "tag": "sha-a1b2c3d",      // tag imutável publicada no ghcr.io
-                               // (frontend: "sha-a1b2c3d-dev")
+                               // (frontend: "sha-a1b2c3d" se imagem única;
+                               //  "sha-a1b2c3d-dev" se legado)
     "sha": "a1b2c3d4e5f6...",  // commit completo (informativo)
     "branch": "dev"            // precisa ser "dev"
   }
@@ -100,7 +105,9 @@ documentação do contrato:
     GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
     INFRA_REPOSITORY: ${{ vars.INFRA_REPOSITORY }}
     TAG: sha-${{ github.sha }}   # já truncado para 7 caracteres no job de build
-                                 # (o frontend acrescenta o ambiente: sha-<7>-dev)
+                                 # (frontend legado acrescenta o ambiente:
+                                 #  sha-<7>-dev; com FRONTEND_DISPATCH_UNIFIED=true
+                                 #  envia a imagem única, sha-<7>)
   run: |
     gh api "repos/${INFRA_REPOSITORY}/dispatches" \
       -f event_type=image-published \
@@ -147,10 +154,12 @@ branch padrão** (`main`) deste repositório. Consequências práticas:
 
 `deploy.yml` tem **só** `workflow_dispatch`. Os motivos:
 
-1. **Build por ambiente.** O frontend embute `NEXT_PUBLIC_API_URL` no bundle, de
-   modo que a imagem de staging precisa vir de um build da branch `staging` e a
-   de produção, de um build da `main`. Não existe "promover" a mesma imagem
-   entre ambientes.
+1. **Escolha consciente da versão promovida.** Com a **imagem única** do
+   frontend (`sha-<7>`, ADR-012), a mesma imagem testada em `dev` é promovida
+   para `staging` e `production` — a URL da API vem de `API_URL` no `.env` de
+   cada ambiente. Com imagens **legado** (`sha-<7>-<env>`), a URL vem embutida
+   no build, então a imagem de staging precisa vir de um build da branch
+   `staging` e a de produção, de um build da `main`.
 2. **Migrations.** O Flyway aplica as migrations no startup do backend, e
    rollback de imagem não desfaz migration. Produção precisa de decisão humana.
 3. **Aprovação.** `environment: production` com revisor obrigatório só funciona
@@ -163,7 +172,9 @@ branch padrão** (`main`) deste repositório. Consequências práticas:
    - `environment`: `staging` ou `production`;
    - `service`: `frontend`, `backend` ou `both`;
    - `frontend_tag` e/ou `backend_tag`: a tag publicada no ghcr.io.
-     Backend: `sha-a1b2c3d`. Frontend: com o sufixo **do ambiente de destino**
+     Backend: `sha-a1b2c3d`. Frontend: a imagem única `sha-a1b2c3d` (a mesma
+     validada em dev; exige `API_URL` no `.env` do ambiente) ou, enquanto
+     houver imagens legado, a tag com o sufixo **do ambiente de destino**
      (ex.: `sha-a1b2c3d-staging` ou `sha-a1b2c3d-production`).
 3. **Run workflow**.
 4. Com `environment=production`, o job entra em **Waiting** com o aviso
@@ -181,10 +192,10 @@ versões diferentes para frontend e backend. A tag que não for informada é
 gh workflow run deploy.yml \
   -f environment=staging -f service=backend -f backend_tag=sha-9f8e7d6
 
-# produção, os dois serviços com tags distintas
+# produção, os dois serviços com tags distintas (frontend: imagem única)
 gh workflow run deploy.yml \
   -f environment=production -f service=both \
-  -f frontend_tag=sha-a1b2c3d-production -f backend_tag=sha-9f8e7d6
+  -f frontend_tag=sha-a1b2c3d -f backend_tag=sha-9f8e7d6
 
 # acompanhar
 gh run watch
@@ -308,8 +319,13 @@ apenas reporta a falha.
    ```bash
    gh workflow run deploy.yml \
      -f environment=production -f service=both \
-     -f frontend_tag=sha-ANTERIOR-production -f backend_tag=sha-ANTERIOR
+     -f frontend_tag=sha-ANTERIOR -f backend_tag=sha-ANTERIOR
    ```
+
+   Use a tag do frontend **exatamente** como aparece no `releases.log`: pode ser
+   uma imagem única (`sha-<7>`) ou legado (`sha-<7>-production`). Voltar de uma
+   única para uma legado é sempre seguro (a legado ignora `API_URL`); voltar
+   para uma única exige `API_URL` válida no `.env`.
 
 3. Aprove o deployment, se `production` exigir revisor.
 
