@@ -1,0 +1,158 @@
+# ---------------------------------------------------------------------------
+# docker-compose.aws.yml — Compose de CADA instância EC2 da AWS (Learner Lab).
+#
+# Diferenças em relação ao docker/docker-compose.yml (servidor local):
+#   - SEM serviço de banco: o banco é o Amazon RDS (PostgreSQL 17), alcançado
+#     pelo endpoint RDS_ENDPOINT na porta 5432;
+#   - um único ambiente por instância (projeto Compose `gini-aws`), portas
+#     fixas 3000/8080 — quem as expõe à internet é o ALB, não a instância;
+#   - URL do frontend e da API apontam para o DNS do ALB.
+#
+# Instalado pelo aws/bootstrap-ec2.sh em /opt/gini/aws/docker-compose.yml,
+# junto do /opt/gini/aws/.env (modo 600, gerado pelo script). Uso manual na
+# instância (via Session Manager), sempre como root:
+#
+#   cd /opt/gini/aws && sudo docker compose ps
+#   cd /opt/gini/aws && sudo docker compose logs --tail=100 backend
+#
+# Validação local (sem subir nada), com e sem o Mailpit:
+#   docker compose --env-file aws/.env.aws.example -f aws/docker-compose.aws.yml config
+#   docker compose --env-file aws/.env.aws.example -f aws/docker-compose.aws.yml --profile mailpit config
+#
+# Contrato de parâmetros: aws/PARAMETERS.md. Procedimento: docs/aws-learner-lab.md.
+# ---------------------------------------------------------------------------
+
+name: gini-aws
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # -------------------------------------------------------------------------
+  # Mailpit — caixa de entrada de TESTE do e-mail de recuperação de senha
+  # (ADR-011). Só sobe com o perfil `mailpit` (ENABLE_MAILPIT=true no
+  # bootstrap). SMTP (1025) não publicado; interface web presa a 127.0.0.1 da
+  # instância, acessível por túnel do Session Manager. Cada instância tem o
+  # SEU Mailpit: o e-mail cai na instância que atendeu a requisição.
+  # -------------------------------------------------------------------------
+  mailpit:
+    image: axllent/mailpit:v1.27
+    profiles: ["mailpit"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *logging
+    labels:
+      br.fatec.gini.environment: ${APP_ENVIRONMENT:-staging}
+      br.fatec.gini.service: mailpit
+
+  # -------------------------------------------------------------------------
+  # Backend — Java 21 + Spring Boot, perfil prod. As migrations do Flyway
+  # rodam no startup; as duas instâncias podem subir ao mesmo tempo porque o
+  # Flyway serializa a migração com um lock no próprio banco.
+  # -------------------------------------------------------------------------
+  backend:
+    image: ${BACKEND_IMAGE:?defina BACKEND_IMAGE}:${BACKEND_TAG:?defina BACKEND_TAG}
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      # O RDS com PostgreSQL 15+ exige SSL por padrão (rds.force_ssl=1);
+      # sslmode=require cifra a conexão sem exigir o certificado da AWS.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://${RDS_ENDPOINT:?defina RDS_ENDPOINT (endpoint do RDS, sem porta)}:5432/${DB_NAME:?defina DB_NAME}?sslmode=require
+      SPRING_DATASOURCE_USERNAME: ${DB_USER:?defina DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD}
+      # Igual nas duas instâncias: um token emitido por uma é aceito pela outra.
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET (32+ caracteres, igual nas duas instâncias)}
+      APP_ENVIRONMENT: ${APP_ENVIRONMENT:?defina APP_ENVIRONMENT}
+      # Origem exata do frontend (http://<DNS_DO_ALB>, sem barra final): CORS e
+      # link do e-mail de recuperação de senha.
+      FRONTEND_URL: ${FRONTEND_URL:?defina FRONTEND_URL}
+      SMTP_HOST: ${SMTP_HOST:?defina SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USERNAME: ${SMTP_USERNAME?defina SMTP_USERNAME (pode ser vazio)}
+      SMTP_PASSWORD: ${SMTP_PASSWORD?defina SMTP_PASSWORD (pode ser vazio)}
+      SMTP_AUTH: ${SMTP_AUTH:-false}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-false}
+      SMTP_FROM: ${SMTP_FROM:?defina SMTP_FROM}
+      PASSWORD_RESET_EXPIRATION_MINUTES: ${PASSWORD_RESET_EXPIRATION_MINUTES:-15}
+      SWAGGER_ENABLED: "false"
+    ports:
+      # Publicada em todas as interfaces porque o ALB chega pela rede da VPC.
+      # Quem restringe o acesso é o Security Group gini-sg-ec2 (só o ALB).
+      - "8080:8080"
+    networks:
+      - backend-net
+      - frontend-net
+    healthcheck:
+      # Mesmo requisito do compose principal: a imagem precisa de curl OU wget.
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS http://127.0.0.1:8080/actuator/health
+          || wget -qO- http://127.0.0.1:8080/actuator/health
+          || exit 1
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      # Mais generoso que o local: instância pequena + primeira conexão ao RDS
+      # + migrations do Flyway no primeiro boot.
+      start_period: 120s
+    logging: *logging
+    labels:
+      br.fatec.gini.environment: ${APP_ENVIRONMENT:-staging}
+      br.fatec.gini.service: backend
+
+  # -------------------------------------------------------------------------
+  # Frontend — Next.js 16, imagem ÚNICA (tag sha-<7>, rótulo
+  # br.fatec.gini.runtime-api-url=true). Lê API_URL no startup e não sobe sem
+  # ela; por isso aqui a variável é OBRIGATÓRIA (já é a regra da Fase B).
+  # -------------------------------------------------------------------------
+  frontend:
+    image: ${FRONTEND_IMAGE:?defina FRONTEND_IMAGE}:${FRONTEND_TAG:?defina FRONTEND_TAG}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # URL pela qual o NAVEGADOR alcança a API: http://<DNS_DO_ALB>:8080.
+      API_URL: ${API_URL:?defina API_URL (http://<DNS_DO_ALB>:8080)}
+    ports:
+      - "3000:3000"
+    networks:
+      - frontend-net
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/api/health')
+          .then(r => process.exit(r.ok ? 0 : 1))
+          .catch(() => process.exit(1))
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
+    logging: *logging
+    labels:
+      br.fatec.gini.environment: ${APP_ENVIRONMENT:-staging}
+      br.fatec.gini.service: frontend
+
+networks:
+  backend-net:
+    driver: bridge
+  frontend-net:
+    driver: bridge

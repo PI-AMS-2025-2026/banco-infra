@@ -6,6 +6,8 @@
 .env
 .env.*
 !.env.example
+# Modelo do .env das instâncias EC2 da AWS (aws/bootstrap-ec2.sh gera o real).
+!.env.aws.example
 images.env
 images.env.previous
 !images.env.example
