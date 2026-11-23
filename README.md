@@ -53,6 +53,14 @@ As portas são configuráveis pelo `.env` de cada ambiente.
 ├── README.md
 ├── docker/
 │   └── docker-compose.yml          # compose único, parametrizado por variáveis
+├── aws/                            # implantação no AWS Learner Lab (homologação, manual)
+│   ├── README.md                   # arquitetura e arquivos
+│   ├── PARAMETERS.md               # contrato: console ↔ bootstrap ↔ CloudFormation
+│   ├── docker-compose.aws.yml      # backend + frontend (+ mailpit), sem banco (RDS)
+│   ├── .env.aws.example            # modelo do .env gerado na instância
+│   ├── bootstrap-ec2.sh            # prepara a EC2 e sobe a aplicação (idempotente)
+│   ├── user-data.sh                # wrapper do user data do launch template
+│   └── cloudformation/README.md    # desenho do template futuro (sem template)
 ├── environments/
 │   ├── dev/        (.env.example, images.env.example)
 │   ├── staging/    (.env.example, images.env.example)
@@ -71,6 +79,7 @@ As portas são configuráveis pelo `.env` de cada ambiente.
 │   └── deploy.yml                  # manual: workflow_dispatch (staging/production)
 └── docs/
     ├── runbook.md                  # procedimentos de operação
+    ├── aws-learner-lab.md          # implantação passo a passo no AWS Learner Lab
     ├── variaveis-e-secrets.md      # catálogo de variáveis e secrets
     ├── estrategia-gatilhos.md      # integração entre repos e deploy manual
     ├── seguranca-runner.md         # riscos e mitigações do runner self-hosted
@@ -213,11 +222,12 @@ As mitigações obrigatórias estão em
 ## Fora do escopo desta fase
 
 Decisão consciente, registrada em
-[ADR-007](docs/decisoes-tecnicas.md#adr-007--escopo-desta-fase-servidor-local-sem-aws-tls-ou-monitoramento):
+[ADR-007](docs/decisoes-tecnicas.md#adr-007--escopo-desta-fase-servidor-local-sem-aws-tls-ou-monitoramento)
+(item AWS atualizado pelo [ADR-013](docs/decisoes-tecnicas.md#adr-013--implantação-na-aws-learner-lab-um-ambiente-de-homologação-por-conta-bootstrap-por-script)):
 
 | Item | Risco aceito agora |
 | --- | --- |
-| **AWS / nuvem** | ponto único de falha; sem acesso fora da rede local |
+| **AWS / nuvem para a produção** | ponto único de falha; sem acesso fora da rede local. A AWS hospeda só a **homologação** de cada aluno, implantada à mão no Learner Lab ([ADR-013](docs/decisoes-tecnicas.md#adr-013--implantação-na-aws-learner-lab-um-ambiente-de-homologação-por-conta-bootstrap-por-script), [runbook da AWS](docs/aws-learner-lab.md)) |
 | **Proxy reverso e TLS/HTTPS** | tráfego em HTTP puro, acesso por `host:porta` |
 | **Monitoramento e alertas** | falha só é percebida por quem olhar |
 | **Cópia de backups para fora do host** | dump e banco na mesma máquina |
@@ -232,6 +242,8 @@ backup diário validado com retenção, segredos fora do Git.
 | Documento | Para quê |
 | --- | --- |
 | [`docs/runbook.md`](docs/runbook.md) | preparar o servidor, deployar, rollback, backup/restore, logs, troubleshooting |
+| [`docs/aws-learner-lab.md`](docs/aws-learner-lab.md) | implantar a homologação no AWS Learner Lab (VPC, SGs, RDS, ALB, EC2), custos e destruição |
+| [`aws/PARAMETERS.md`](aws/PARAMETERS.md) | parâmetros do bootstrap da AWS e mapeamento para CloudFormation |
 | [`docs/variaveis-e-secrets.md`](docs/variaveis-e-secrets.md) | toda variável e secret, onde configurar e exemplos fictícios |
 | [`docs/estrategia-gatilhos.md`](docs/estrategia-gatilhos.md) | integração entre repos, payload, Environments, rollback |
 | [`docs/seguranca-runner.md`](docs/seguranca-runner.md) | riscos do runner self-hosted e mitigações obrigatórias |
