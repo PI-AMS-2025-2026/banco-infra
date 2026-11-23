@@ -7,8 +7,11 @@
 #
 # Contrato do client_payload (ver docs/estrategia-gatilhos.md):
 #   service : "frontend" | "backend"
-#   tag     : tag da imagem publicada (backend: sha-a1b2c3d;
-#             frontend: sha-a1b2c3d-dev)
+#   tag     : tag da imagem publicada. Backend: sha-a1b2c3d. Frontend:
+#             sha-a1b2c3d (imagem única, ADR-012) ou, enquanto durar a
+#             transição, sha-a1b2c3d-dev (legado). A regex abaixo aceita os
+#             dois; quem decide se a imagem única pode subir é o deploy.sh
+#             (exige API_URL no .env do servidor).
 #   sha     : commit completo (informativo)
 #   branch  : precisa ser "dev"
 #

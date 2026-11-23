@@ -2,16 +2,20 @@
 # deploy.yml — Deploy MANUAL de `staging` e `production`.
 #
 # Dev é automático (deploy-dev.yml, via repository_dispatch). Staging e produção
-# são sempre manuais: o frontend é buildado por ambiente (a URL da API é
-# embutida no build), então a tag precisa vir de um build da branch correta —
-# `staging` para homologação, `main` para produção.
+# são sempre manuais (migrations do Flyway e aprovação humana).
+#
+# Tag do frontend — dois formatos aceitos durante a transição (ADR-012):
+#   sha-a1b2c3d          imagem ÚNICA: a mesma de dev é promovida; a URL da
+#                        API vem de API_URL no .env do servidor.
+#   sha-a1b2c3d-staging  LEGADO: buildada por ambiente (URL da API embutida);
+#                        precisa vir da branch correta (`staging` / `main`).
 #
 # Como disparar:
 #   Actions -> "Deploy manual (staging/production)" -> Run workflow
 #   ou:
 #     gh workflow run deploy.yml \
 #       -f environment=staging -f service=both \
-#       -f frontend_tag=sha-1111111-staging -f backend_tag=sha-2222222
+#       -f frontend_tag=sha-1111111 -f backend_tag=sha-2222222
 #
 # ROLLBACK: rode este mesmo workflow informando a tag anterior
 # (consulte /opt/gini/<env>/releases.log no servidor). Ver docs/runbook.md.
@@ -43,7 +47,7 @@ on:
           - backend
           - both
       frontend_tag:
-        description: "Tag da imagem do frontend, com o sufixo do ambiente (ex.: sha-a1b2c3d-staging). Obrigatória se service = frontend ou both."
+        description: "Tag da imagem do frontend: sha-a1b2c3d (imagem única, exige API_URL no .env) ou, legado, sha-a1b2c3d-<ambiente>. Obrigatória se service = frontend ou both."
         required: false
         type: string
       backend_tag:
