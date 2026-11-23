@@ -12,6 +12,7 @@ Onde cada coisa mora:
 | `/opt/gini/<env>/.env` (servidor) | configuração e segredos de cada ambiente | **não** (só o `.example`) |
 | `/opt/gini/<env>/images.env` (servidor) | apenas as tags das imagens | não (reescrito pelo deploy) |
 | Secrets/Variables dos repos de aplicação | integração com este repositório | não |
+| user data das EC2 da AWS / `/opt/gini/aws/.env` | parâmetros e segredos da homologação no Learner Lab ([§9](#9-bootstrap-da-aws-learner-lab)) | **não** (só modelos com `CHANGE_ME`) |
 
 Caminho no GitHub para secrets e variables:
 **Settings → Secrets and variables → Actions** (abas *Secrets* e *Variables*).
@@ -250,3 +251,39 @@ A publicação no ghcr.io usa o `GITHUB_TOKEN` do próprio repo de aplicação c
 - [ ] Variables `NEXT_PUBLIC_API_URL_*` configuradas no repo do frontend
       (enquanto houver imagens legado; obsoletas após a Fase B).
 - [ ] `git ls-files | grep -E '(^|/)\.env$'` sem resultado.
+
+---
+
+## 9. Bootstrap da AWS (Learner Lab)
+
+Parâmetros do [`aws/bootstrap-ec2.sh`](../aws/bootstrap-ec2.sh), passados como
+**variáveis de ambiente** pelo [`aws/user-data.sh`](../aws/user-data.sh) do
+launch template. Não têm relação com os workflows nem com o `deploy.sh`: o
+ambiente da AWS é manual ([ADR-013](decisoes-tecnicas.md#adr-013--implantação-na-aws-learner-lab-um-ambiente-de-homologação-por-conta-bootstrap-por-script)).
+Validação detalhada e mapeamento para CloudFormation:
+[`aws/PARAMETERS.md`](../aws/PARAMETERS.md) (fonte da verdade).
+
+| Variável | Obrig. | Padrão | Finalidade | Exemplo fictício |
+| --- | --- | --- | --- | --- |
+| `RDS_ENDPOINT` | **sim** | — | Endpoint do RDS, sem porta. | `gini-db.abcdefghijkl.us-east-1.rds.amazonaws.com` |
+| `DB_NAME` | não | `gini` | Banco inicial criado no RDS. | `gini` |
+| `DB_USER` | **sim** | — | Usuário principal do RDS. | `gini_admin` |
+| `DB_PASSWORD` | **sim** | — | Senha principal do RDS. Segredo; gerada **uma vez** (`openssl rand -hex 32`), igual nas duas instâncias. | `0123456789abcdef0123456789abcdef` |
+| `JWT_SECRET` | **sim** | — | Segredo dos JWT; 32+ caracteres, **igual nas duas instâncias**. Exclusivo deste ambiente. | `fedcba9876543210fedcba9876543210` |
+| `ALB_DNS` | não | descoberto pelo `ALB_NAME` | DNS do ALB; origem de `FRONTEND_URL=http://<dns>` e `API_URL=http://<dns>:8080`. | `gini-lb-1234567890.us-east-1.elb.amazonaws.com` |
+| `ALB_NAME` | não | `gini-lb` | Nome do ALB para a descoberta. | `gini-lb` |
+| `BACKEND_TAG` / `FRONTEND_TAG` | **sim** | — | Tags `sha-<7>`; o frontend precisa ser a imagem única (rótulo `br.fatec.gini.runtime-api-url=true`). | `sha-a1b2c3d` |
+| `BACKEND_IMAGE` / `FRONTEND_IMAGE` | não | imagens do ghcr.io da organização | Imagens públicas, sem tag. | `ghcr.io/pi-ams-2025-2026/backend-java` |
+| `APP_ENVIRONMENT` | não | `staging` | Ambiente lógico do backend. | `staging` |
+| `ENABLE_MAILPIT` | não | `true` | Sobe o Mailpit (perfil `mailpit`). | `true` |
+| `SMTP_*` | não | valores do Mailpit | Só para SMTP real com `ENABLE_MAILPIT=false`. | — |
+| `INFRA_REF` | não | `main` (aviso) | Tag/commit deste repositório de onde vêm o bootstrap e o compose. | `v1.4.0` |
+| `COMPOSE_VERSION` / `COMPOSE_SHA256` | não | `v5.7.2` / checksum oficial | Versão fixada do compose plugin. | — |
+| `AWS_REGION` | não | metadados da instância | Região usada na descoberta do ALB. | `us-east-1` |
+| `HEALTH_TIMEOUT` | não | `300` | Espera pela saúde dos containers (s). | `300` |
+| `DRY_RUN` | não | `0` | `1` = só valida e mostra o plano. | `1` |
+
+> O user data **não é sigiloso** (visível no console e nos metadados da
+> instância). Por isso os segredos da AWS são **exclusivos** desse ambiente —
+> nunca reaproveite os do servidor local. Na instância, o bootstrap os grava
+> em `/opt/gini/aws/.env` (modo `600`, root) e nunca os imprime.

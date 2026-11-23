@@ -212,8 +212,10 @@ aplicada: o código antigo passaria a rodar sobre um schema novo.
 
 ## ADR-007 — Escopo desta fase: servidor local, sem AWS, TLS ou monitoramento
 
-**Status:** Aceita · **Data:** 2026-10-08 · **Revisar quando:** a aplicação for
-exposta fora da rede da Fatec, ou houver usuários reais
+**Status:** Aceita — **parcialmente substituída** pelo
+[ADR-013](#adr-013--implantação-na-aws-learner-lab-um-ambiente-de-homologação-por-conta-bootstrap-por-script)
+no item "AWS" (2026-11-23) · **Data:** 2026-10-08 · **Revisar quando:** a
+aplicação for exposta fora da rede da Fatec, ou houver usuários reais
 
 **Contexto.** Há tempo limitado e um servidor local disponível. A tentação é
 resolver tudo (nuvem, HTTPS, observabilidade) de uma vez.
@@ -223,7 +225,7 @@ Ubuntu local. Ficam explicitamente **fora do escopo**:
 
 | Fora do escopo | Consequência atual | Quando virará necessário |
 | --- | --- | --- |
-| **AWS** (ou qualquer nuvem) | ponto único de falha; sem disponibilidade fora da rede local | exposição pública ou requisito de uptime |
+| **AWS** (ou qualquer nuvem) | ponto único de falha; sem disponibilidade fora da rede local | exposição pública ou requisito de uptime — **atualizado pelo ADR-013:** a AWS passa a hospedar um ambiente de **homologação** por aluno (Learner Lab); a **produção** continua local e este item segue valendo para ela |
 | **Proxy reverso + TLS/HTTPS** | tráfego em HTTP puro, acesso por `host:porta`; cookies/JWT trafegam sem cifra | qualquer acesso fora da rede confiável |
 | **Monitoramento e alertas** | falha só é percebida por quem olhar; sem métricas históricas | antes de ter usuários reais |
 | **Cópia de backups para fora do host** | dump e banco na mesma máquina: perda do host = perda dos dois | assim que houver dado que não se possa perder |
@@ -440,3 +442,73 @@ Procedimento passo a passo, com reversão por etapa:
 | *Rewrites* do Next.js encaminhando `/api` ao backend | O servidor Next.js passaria a intermediar todo o tráfego da API (mais um salto, timeouts e cabeçalhos a tratar) e o frontend precisaria alcançar o backend pela rede interna — muda o modelo de CORS e de rede do compose. |
 | Frontend busca a configuração em runtime (`/config.json`) antes de chamar a API | Mudança maior no código da aplicação (toda chamada passa a depender de uma requisição prévia) para o mesmo resultado do placeholder. |
 | Passar `API_URL` como *build arg* | Continua sendo build por ambiente — é o problema que se quer resolver. |
+
+---
+
+## ADR-013 — Implantação na AWS Learner Lab: um ambiente de homologação por conta, bootstrap por script
+
+**Status:** Aceita · **Data:** 2026-11-23 · **Substitui parcialmente:** o item
+"AWS" do [ADR-007](#adr-007--escopo-desta-fase-servidor-local-sem-aws-tls-ou-monitoramento)
+· **Revisar quando:** o template CloudFormation for validado, ou se a
+produção sair do servidor local
+
+**Contexto.** A disciplina de cloud exige que **cada aluno** implante a
+aplicação na **própria** conta AWS Academy Learner Lab, manualmente. O roteiro
+que circulava (Notion) tinha falhas: o compose do backend subia um Postgres
+próprio e ignorava o RDS, o frontend nunca era iniciado, o build era feito na
+instância, faltava a regra de SG para o RDS e os health checks do Target Group
+não estavam definidos. O Learner Lab impõe restrições: só `us-east-1`/`us-west-2`,
+IAM fechado (só `LabRole`/`LabInstanceProfile`), tipos de instância limitados,
+RDS sem Multi-AZ, instâncias paradas ao fim da sessão e orçamento finito.
+
+**Alternativas.**
+
+| | Alternativa | Por que sim / por que não |
+| --- | --- | --- |
+| A | Seguir o roteiro manual do Notion, com o compose principal (`docker/docker-compose.yml`) copiado para a instância | Reaproveita arquivos, mas o compose principal sobe o próprio banco (o RDS fica sem uso) e depende do `deploy.sh`/runner, que não existem na AWS. Cada aluno repetiria os erros à mão. |
+| B | **Console para a infraestrutura + script de bootstrap idempotente no user data**, com compose próprio da AWS e contrato de parâmetros | Atende à exigência de implantação manual, elimina os passos frágeis dentro da instância e deixa cada valor mapeado para um futuro template. **Escolhida.** |
+| C | CloudFormation completo desde já | Mais reprodutível, mas o objetivo da disciplina é o processo manual, e um template exige um ciclo de validação no Learner Lab (IAM, limites) que ainda não foi feito. Fica como evolução, com o desenho pronto. |
+
+**Decisão.**
+
+- A AWS hospeda **homologação** (`APP_ENVIRONMENT=staging`, com Mailpit); a
+  **produção continua no servidor local** (ADR-007 segue valendo para ela). Um
+  ambiente por conta de aluno; sem deploy automático e sem workflow.
+- Topologia: VPC com 2 AZs sem NAT, ALB `gini-lb` com listeners 80
+  (frontend) e 8080 (API), 2 EC2 (`t3.small`, AL2023) em sub-redes públicas,
+  RDS PostgreSQL 17 em sub-redes privadas. SGs em cadeia: internet → ALB →
+  EC2 → RDS; sem SSH (Session Manager).
+- **Ordem nova:** o ALB é criado **antes** das instâncias, porque
+  `FRONTEND_URL` e `API_URL` derivam do DNS dele.
+- Cada EC2 roda `aws/docker-compose.aws.yml` (backend + frontend + Mailpit
+  opcional, **sem banco**), configurado por `aws/bootstrap-ec2.sh`, chamado
+  pelo `aws/user-data.sh`. O bootstrap é idempotente, valida todos os
+  parâmetros antes de agir, fixa a versão e o SHA-256 do compose plugin,
+  confere o RDS e o rótulo da imagem única do frontend (ADR-012) antes de subir.
+- O frontend na AWS usa **somente** a imagem única (`sha-<7>`): é o que permite
+  usar o mesmo artefato do servidor local sem rebuild.
+- `aws/PARAMETERS.md` é o contrato entre console, bootstrap e o futuro
+  CloudFormation (`aws/cloudformation/README.md`).
+
+**Consequências.**
+
+- Cada aluno reproduz o ambiente seguindo `docs/aws-learner-lab.md`; o que
+  roda dentro da instância é igual para todos.
+- `docker/`, `scripts/deploy.sh` e os workflows **não** mudam: a AWS é um
+  caminho paralelo, sem runner, sem `images.env` e sem backup automático
+  (o RDS tem backup próprio, opcional).
+- **Segredos no user data** (`DB_PASSWORD`, `JWT_SECRET`): visíveis no console
+  e nos metadados da instância. Aceito no laboratório (conta individual,
+  segredos exclusivos deste ambiente); alternativa documentada: SSM Parameter
+  Store, se o `LabRole` permitir. Diverge do ADR-009 (que proíbe segredo fora do
+  `.env` do servidor) só neste ambiente.
+- Duas instâncias = dois Mailpit: o e-mail de recuperação cai na instância que
+  atendeu a requisição; o runbook ensina a procurar nas duas.
+- HTTP puro também na AWS (sem TLS): coerente com o ADR-007; o ALB permite
+  adicionar HTTPS depois sem mudar as imagens (exigiria certificado e domínio).
+- Custos: ~US$ 0,10/h com tudo ligado; o ALB cobra mesmo com as instâncias
+  paradas. Destruição documentada.
+- As imagens publicadas são só `linux/amd64`: instâncias ARM (`t4g`) não servem
+  enquanto os repos de aplicação não publicarem multi-arquitetura.
+- Mudanças de versão (tags) são feitas reexecutando o bootstrap em cada
+  instância — manual, como a disciplina exige.
