@@ -129,6 +129,10 @@ services:
       PORT: "3000"
       # URL pela qual o NAVEGADOR alcança a API: http://<DNS_DO_ALB>:8080.
       API_URL: ${API_URL:?defina API_URL (http://<DNS_DO_ALB>:8080)}
+      # Mesmo ambiente lógico do backend (homologação: `staging`). Lido em
+      # runtime pelo frontend só para exibir a faixa do ambiente; imagens sem
+      # esse suporte ignoram a variável.
+      APP_ENVIRONMENT: ${APP_ENVIRONMENT:-staging}
     ports:
       - "3000:3000"
     networks:

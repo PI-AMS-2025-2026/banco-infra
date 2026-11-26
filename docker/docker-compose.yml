@@ -199,6 +199,11 @@ services:
       # container: depois de alterá-la no .env, o container do frontend
       # precisa ser RECRIADO (rodar o deploy do frontend de novo basta).
       API_URL: ${API_URL:?defina API_URL no .env (URL do backend para o navegador, ex. http://192.168.0.10:8081)}
+      # Ambiente lógico (dev|staging|production), derivado de ENV_NAME como no
+      # backend. Lido em runtime pelo frontend só para exibir a faixa que
+      # indica o ambiente; `production` não exibe faixa. Imagens sem esse
+      # suporte ignoram a variável. Também só vale após RECRIAR o container.
+      APP_ENVIRONMENT: ${ENV_NAME}
     ports:
       - "${FRONTEND_PORT:?defina FRONTEND_PORT no .env}:3000"
     networks:
