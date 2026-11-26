@@ -17,7 +17,6 @@ pressupõe acesso SSH ao servidor Ubuntu local.
 10. [Logs e inspeção](#10-logs-e-inspeção)
 11. [Troubleshooting](#11-troubleshooting)
 12. [Manutenção periódica](#12-manutenção-periódica)
-13. [Migração para a imagem única do frontend](#13-migração-para-a-imagem-única-do-frontend)
 
 ---
 
@@ -251,10 +250,30 @@ sudo grep -c CHANGE_ME /opt/gini/$ENV/.env          # precisa ser 0
 
 O `deploy.sh` aborta se o modo não for `600` ou se sobrar algum `CHANGE_ME`.
 
-`API_URL` é a URL pela qual o **navegador** chega ao backend do ambiente
-(ex.: `http://192.168.0.10:8081` em dev), sem barra final. Use o mesmo valor
-da variable `NEXT_PUBLIC_API_URL_<ENV>` do repo do frontend. A imagem única do
-frontend não sobe sem ela ([ADR-012](decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)).
+`API_URL` é **obrigatória**: a URL pela qual o **navegador** chega ao backend
+do ambiente (ex.: `http://192.168.0.10:8081` em dev), sem barra final e sem
+caminho. O frontend a lê no startup e não sobe sem ela
+([ADR-012](decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)).
+De uma máquina **cliente** da rede (não do servidor), confirme que ela responde:
+`curl -fsS http://192.168.0.10:8081/actuator/health`.
+
+### 4.1 Trocar `API_URL`
+
+O valor só é lido quando o container é **criado**; `docker restart` não aplica
+um valor novo. Depois de editar o `.env`, rode o deploy do frontend com a tag
+**atual** — o Compose percebe que a configuração mudou e recria o container, e
+o `deploy.sh` valida o novo valor antes:
+
+```bash
+sudo -u gha-runner nano /opt/gini/<env>/.env        # novo API_URL
+grep FRONTEND_TAG /opt/gini/<env>/images.env         # tag atual
+
+# staging / production
+gh workflow run deploy.yml -f environment=<env> -f service=frontend -f frontend_tag=<tag atual>
+
+# dev (não tem workflow_dispatch): direto no servidor
+cd /opt/gini/infra && sudo -u gha-runner env FRONTEND_TAG=<tag atual> ./scripts/deploy.sh dev
+```
 
 ---
 
@@ -296,14 +315,11 @@ gh workflow run deploy.yml \
   -f frontend_tag=staging -f backend_tag=staging
 ```
 
-Para `production`, use tags vindas de builds da branch `main` e aprove o
-deployment pendente.
+Para `production`, use as tags `sha-<7>` já validadas em `staging` (a mesma
+imagem é promovida entre os ambientes) e aprove o deployment pendente.
 
-Formato das tags imutáveis: backend `sha-<7>`. Frontend: imagem única
-`sha-<7>` (a mesma nos três ambientes; a URL da API vem de `API_URL` no `.env`)
-ou, enquanto durar a transição, legado `sha-<7>-<ambiente>`
-(ex.: `sha-a1b2c3d-staging`). Nunca use uma tag **legado** de outro ambiente:
-nela a URL da API vem embutida na imagem.
+Formato das tags imutáveis: `sha-<7>` no backend e no frontend. A imagem do
+frontend é a mesma nos três ambientes; a URL da API vem de `API_URL` no `.env`.
 
 ### 5.3 Deploy manual direto no servidor (contorno)
 
@@ -379,18 +395,17 @@ O que o `deploy.sh` faz, em ordem:
 6. salva `images.env` em `images.env.previous` e grava as tags novas (a tag não
    informada é preservada);
 7. `docker compose pull` — falha antecipada se a tag não existir, **sem** mexer
-   no que está no ar; em seguida lê o rótulo `br.fatec.gini.runtime-api-url`
-   da imagem do frontend: imagem **única** sem `API_URL` válida no `.env` →
-   aborta aqui, também sem mexer no que está no ar; imagem **legado** → segue
-   (`API_URL`, se houver, é ignorada);
+   no que está no ar; em seguida confere que a imagem do frontend tem o rótulo
+   `br.fatec.gini.runtime-api-url=true` (lê `API_URL` em runtime) — sem ele,
+   aborta aqui, também sem mexer no que está no ar;
 8. `docker compose up -d --remove-orphans`;
 9. espera `db`, `backend` e `frontend` ficarem `healthy` (até `HEALTH_TIMEOUT`),
    confere `/actuator/health` e `/api/health` nas portas publicadas e procura a
    confirmação do Flyway nos logs (ausência = **aviso**, não falha). Se o
    Mailpit estiver ligado, confere a saúde dele, também só com **aviso**;
 10. em falha: imprime `logs --tail=100`, faz rollback e sai com código ≠ 0;
-11. em sucesso: grava `releases.log` (com `frontend_tipo=legado|unica`), marca
-    `.deploy-ok` e roda `docker image prune -f`.
+11. em sucesso: grava `releases.log`, marca `.deploy-ok` e roda
+    `docker image prune -f`.
 
 ---
 
@@ -408,16 +423,16 @@ quando o rollback funciona** — a versão pedida não entrou no ar.
 tail -20 /opt/gini/production/releases.log
 cat /opt/gini/production/images.env.previous
 
-# 2. Rodar o deploy com a tag anterior (copie a do frontend como está no
-#    releases.log: sha-<7> se imagem única, sha-<7>-production se legado)
+# 2. Rodar o deploy com a tag anterior
 gh workflow run deploy.yml \
   -f environment=production -f service=both \
   -f frontend_tag=sha-ANTERIOR -f backend_tag=sha-ANTERIOR
 ```
 
-Voltar de uma imagem única para uma legado é sempre seguro: a legado ignora
-`API_URL`. Voltar para uma imagem única exige `API_URL` válida no `.env` (o
-`deploy.sh` confere e, no rollback automático, avisa se faltar).
+Só é possível voltar para imagens do frontend com o rótulo
+`br.fatec.gini.runtime-api-url=true`: tags antigas, com a URL da API embutida no
+build, são recusadas pelo `deploy.sh`
+([ADR-012](decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)).
 
 ### 7.3 Atenção: rollback não reverte o banco
 
@@ -665,12 +680,12 @@ Suspeitos mais comuns:
 4. `deploy.sh` abortou citando `COMPOSE_PROFILES=mailpit` → o ambiente é
    `production`; remova a linha e configure um SMTP real.
 
-### `deploy.sh` aborta: "imagem ... é ÚNICA ... API_URL não está definida"
+### `deploy.sh` aborta: "API_URL não definida" ou "API_URL inválida"
 
-A tag pedida é da **imagem única** do frontend (rótulo
-`br.fatec.gini.runtime-api-url=true`), que lê a URL da API em runtime, e o
-`.env` do ambiente não tem `API_URL` válida. Nada foi alterado no ambiente no
-ar (o `images.env` foi revertido). Corrija e rode o deploy de novo:
+O `.env` do ambiente não tem `API_URL`, ou ela está fora do formato
+`^https?://[A-Za-z0-9._-]+(:[0-9]{1,5})?$`. A verificação acontece antes de
+qualquer alteração: nada foi mexido no servidor. Corrija e rode o deploy de
+novo:
 
 ```bash
 sudo -u gha-runner nano /opt/gini/<env>/.env      # API_URL=http://<host>:<BACKEND_PORT>
@@ -679,30 +694,36 @@ sudo grep -E '^API_URL=https?://[A-Za-z0-9._-]+(:[0-9]{1,5})?$' /opt/gini/<env>/
 
 Erros comuns: barra no final (`.../`), caminho (`/api`), faltar `http://`.
 
-Isso também acontece num deploy **só do backend** quando o frontend em uso já é
-uma imagem única: o `deploy.sh` confere a tag do frontend que vai ficar no ar.
+### `deploy.sh` aborta: "não tem o rótulo br.fatec.gini.runtime-api-url=true"
+
+A tag pedida é de uma imagem antiga do frontend, com a URL da API embutida no
+build: ela ignoraria `API_URL` e não é mais suportada. Nada foi alterado no
+ambiente no ar (o `images.env` foi revertido). Use a tag `sha-<7>` de um build
+atual do frontend. Para conferir uma tag antes do deploy:
+
+```bash
+IMG=ghcr.io/pi-ams-2025-2026/frontend-nextjs:sha-XXXXXXX
+sudo -u gha-runner docker pull "$IMG"
+sudo -u gha-runner docker image inspect \
+  --format '{{ index .Config.Labels "br.fatec.gini.runtime-api-url" }}' "$IMG"   # true
+```
+
+Isso também acontece num deploy **só do backend** se o frontend em uso no
+ambiente ainda for uma imagem antiga: o `deploy.sh` confere a tag do frontend
+que vai ficar no ar. Faça primeiro o deploy do frontend com uma tag atual.
 
 ### Frontend `healthy` mas a tela não carrega dados
 
-Descubra o tipo da imagem em uso (`tail -1 /opt/gini/<env>/releases.log`,
-campo `frontend_tipo`).
+A URL da API vem de `API_URL` no `.env`. Confira o valor que o container
+recebeu e se ele é acessível **do navegador** (não do servidor):
 
-- **Imagem única** (`unica`): a URL da API vem de `API_URL` no `.env`. Confira
-  o valor que o container recebeu e se ele é acessível **do navegador** (não do
-  servidor):
+```bash
+docker exec gini-<env>-frontend printenv API_URL
+```
 
-  ```bash
-  docker exec gini-<env>-frontend printenv API_URL
-  ```
-
-  Se alterou `API_URL`, o container precisa ser **recriado** (`docker restart`
-  não basta): rode o deploy do frontend de novo, mesmo com a tag atual
-  ([§13.3](#133-trocar-api_url-depois-da-migração)).
-- **Legado** (`legado`): a URL da API é **embutida no build** do Next.js. Se a
-  imagem de staging foi buildada com a URL de dev, o frontend chama a API
-  errada. Confirme que a tag veio de um build da branch correta (`staging` →
-  staging, `main` → produção) e que `NEXT_PUBLIC_API_URL_*` está certa no repo
-  do frontend.
+Se alterou `API_URL`, o container precisa ser **recriado** (`docker restart`
+não basta): rode o deploy do frontend de novo, mesmo com a tag atual
+([§4.1](#41-trocar-api_url)).
 
 Verifique também `FRONTEND_URL` no `.env` do ambiente: é a origem usada no CORS
 do backend e precisa ser exatamente a do frontend (esquema + host + porta, sem
@@ -759,201 +780,6 @@ Se o volume foi removido por engano, restaure o backup mais recente (seção 9).
 | Trimestral | rotacionar `GHCR_PULL_TOKEN` ([`seguranca-runner.md`](seguranca-runner.md#28-rotação-do-pat-do-ghcrio)) |
 | Trimestral | atualizar o self-hosted runner (seção 3.2) |
 | Trimestral | rever o checklist de [`seguranca-runner.md`](seguranca-runner.md#4-checklist-de-revisão) |
-
----
-
-## 13. Migração para a imagem única do frontend
-
-Contexto e decisão: [ADR-012](decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime).
-Resumo: o frontend deixa de ser buildado por ambiente (`sha-<7>-<env>`, URL da
-API embutida) e passa a publicar **uma** imagem por commit (`sha-<7>`) que lê a
-URL da API da variável `API_URL` no startup. A imagem única tem o rótulo OCI
-`br.fatec.gini.runtime-api-url=true` e **não sobe sem `API_URL`**; a imagem
-legado ignora `API_URL`.
-
-Siga as etapas **na ordem**. Cada uma é segura de parar no meio: até a etapa 7,
-o ambiente continua funcionando com imagens legado, e o rollback entre os dois
-formatos funciona.
-
-| Etapa | Onde | Muda algo no ar? |
-| --- | --- | --- |
-| 1. Publicar a Fase A deste repositório | `banco-infra` | não (só na próxima execução de deploy) |
-| 2. `API_URL` no `.env` de cada ambiente | servidor | não |
-| 3. Fase A do frontend | `frontend-nextjs` | não |
-| 4. Deploy manual da imagem única em `dev` | `banco-infra` / servidor | sim, só `dev` |
-| 5. `FRONTEND_DISPATCH_UNIFIED=true` | `frontend-nextjs` | sim, deploys automáticos de `dev` |
-| 6. `staging` e depois `production` | `banco-infra` (Actions) | sim |
-| 7. Fase B nos dois repositórios | ambos | não (remove o legado) |
-
-### 13.1 Etapas
-
-**Etapa 1 — publicar a Fase A deste repositório (`banco-infra`).**
-
-1. Merge em `main` (o `repository_dispatch` sempre usa a versão da `main`).
-2. No servidor, atualize o checkout usado no deploy por SSH:
-
-   ```bash
-   cd /opt/gini/infra && sudo git pull --ff-only
-   bash scripts/tests/test-frontend-api-url.sh     # todos os casos "ok"
-   ```
-
-O próximo deploy de cada ambiente **recria o container do frontend uma vez**,
-mesmo com imagem legado: a configuração dele ganhou a variável `API_URL`
-(vazia). É esperado e inofensivo.
-
-*Reversão:* reverter o merge em `main` e `git pull` no servidor. Nada nos
-ambientes depende desta etapa ainda.
-
-**Etapa 2 — adicionar `API_URL` ao `.env` de cada ambiente (dev → staging →
-production), sem redeploy.**
-
-O valor é o **mesmo** da variable `NEXT_PUBLIC_API_URL_<ENV>` do repo do
-frontend (consulte em *frontend-nextjs → Settings → Secrets and variables →
-Actions → Variables*, ou `gh variable list -R PI-AMS-2025-2026/frontend-nextjs`).
-
-```bash
-ENV=dev   # depois staging, depois production
-
-sudo -u gha-runner nano /opt/gini/$ENV/.env
-#   API_URL=http://192.168.0.10:8081     <- exemplo de dev; sem barra final
-
-# conferir formato, modo e dono
-sudo grep -E '^API_URL=https?://[A-Za-z0-9._-]+(:[0-9]{1,5})?$' /opt/gini/$ENV/.env
-sudo stat -c '%a %U:%G' /opt/gini/$ENV/.env    # 600 gha-runner:gha-runner
-```
-
-De uma máquina **cliente** da rede (não do servidor), confirme que a URL
-responde: `curl -fsS http://192.168.0.10:8081/actuator/health`.
-
-Não é preciso redeploy: as imagens legado ignoram `API_URL`. No próximo deploy
-o log mostrará `imagem antiga: API_URL ignorada`.
-
-*Reversão:* apagar a linha `API_URL` do `.env`.
-
-**Etapa 3 — mergear a Fase A no repo do frontend.**
-
-A partir daqui o build publica a imagem única `sha-<7>`. Enquanto
-`FRONTEND_DISPATCH_UNIFIED` não for `true`, o deploy automático de `dev`
-continua recebendo a tag legado. Confira que a imagem única tem o rótulo:
-
-```bash
-IMG=ghcr.io/pi-ams-2025-2026/frontend-nextjs:sha-XXXXXXX   # tag única publicada
-sudo -u gha-runner docker pull "$IMG"
-sudo -u gha-runner docker image inspect \
-  --format '{{ index .Config.Labels "br.fatec.gini.runtime-api-url" }}' "$IMG"
-# esperado: true
-```
-
-*Reversão:* reverter o merge no repo do frontend. Nada foi implantado.
-
-**Etapa 4 — validar com deploy manual da imagem única em `dev`.**
-
-Anote antes a tag atual do frontend (`grep FRONTEND_TAG /opt/gini/dev/images.env`):
-é a tag de volta. Depois, uma das duas formas:
-
-```bash
-# a) pela Actions (simula o dispatch do frontend; exige gh com escrita aqui)
-gh api repos/PI-AMS-2025-2026/banco-infra/dispatches \
-  -f event_type=image-published \
-  -f 'client_payload[service]=frontend' \
-  -f 'client_payload[tag]=sha-XXXXXXX' \
-  -f 'client_payload[branch]=dev'
-
-# b) por SSH, no servidor
-cd /opt/gini/infra
-sudo -u gha-runner env FRONTEND_TAG=sha-XXXXXXX ./scripts/deploy.sh dev
-```
-
-Conferir:
-
-```bash
-tail -1 /opt/gini/dev/releases.log           # frontend_tipo=unica, resultado=SUCESSO
-curl -fsS http://127.0.0.1:3001/api/health   # health do frontend
-curl -fsS http://127.0.0.1:8081/actuator/health
-docker exec gini-dev-frontend printenv API_URL
-```
-
-E **no navegador**: abrir `http://<servidor>:3001`, fazer login e, nas
-ferramentas do desenvolvedor (aba *Network*), confirmar que as chamadas vão para
-a `API_URL` de dev.
-
-Até a etapa 5, um push na branch `dev` do frontend ainda dispara um deploy com a
-tag legado e substitui a imagem única em `dev`. É inofensivo; repita esta etapa
-se quiser continuar observando.
-
-*Reversão:* implantar de novo a tag legado anotada (mesmo comando, com
-`sha-XXXXXXX-dev`). A legado ignora `API_URL`, então nada no `.env` precisa
-mudar.
-
-**Etapa 5 — ligar o cutover no repo do frontend.**
-
-```bash
-gh variable set FRONTEND_DISPATCH_UNIFIED --body true -R PI-AMS-2025-2026/frontend-nextjs
-```
-
-A partir daqui, cada push em `dev` dispara o deploy automático com a tag única
-`sha-<7>`. Confira no próximo deploy: `deploy-dev.yml` verde e
-`frontend_tipo=unica` no `releases.log`.
-
-*Reversão:* `gh variable set FRONTEND_DISPATCH_UNIFIED --body false -R ...` (ou
-apagar a variable) e, se `dev` precisar voltar já, implantar a última tag
-legado como na etapa 4.
-
-**Etapa 6 — `staging` e depois `production` (manual, com aprovação).**
-
-Use a **mesma** tag única validada em `dev` — é a promoção do artefato testado.
-
-```bash
-gh workflow run deploy.yml \
-  -f environment=staging -f service=frontend -f frontend_tag=sha-XXXXXXX
-# conferir como na etapa 4, nas portas de staging (3002 / 8082)
-
-gh workflow run deploy.yml \
-  -f environment=production -f service=frontend -f frontend_tag=sha-XXXXXXX
-# aprovar o deployment pendente; conferir nas portas 3000 / 8080
-```
-
-Se o `.env` do ambiente estiver sem `API_URL`, o deploy é **recusado antes do
-`up`** e o ambiente continua como estava — volte à etapa 2.
-
-*Reversão:* rodar o `deploy.yml` com a tag legado anterior do ambiente
-(`sha-XXXXXXX-staging` / `sha-XXXXXXX-production`, do `releases.log`).
-
-**Etapa 7 — Fase B nos dois repositórios.**
-
-Só depois de os três ambientes estarem estáveis com a imagem única e com
-confirmação do grupo. Neste repositório: `API_URL` passa a ser obrigatória no
-compose (`${API_URL:?...}`) e a documentação passa a citar só `sha-<7>`. No
-frontend: deixa de publicar as tags `sha-<7>-<env>` e as variables
-`NEXT_PUBLIC_API_URL_*` podem ser apagadas.
-
-*Reversão:* reverter os commits da Fase B. Os `.env` já têm `API_URL`, então a
-reversão não exige nada no servidor.
-
-### 13.2 Rollback entre formatos
-
-`images.env.previous` guarda só as tags; `API_URL` fica no `.env`. Por isso:
-
-| De | Para | Funciona? |
-| --- | --- | --- |
-| imagem única | legado | sempre (a legado ignora `API_URL`) |
-| legado | imagem única | se o `.env` tiver `API_URL` válida (o `deploy.sh` confere; no rollback automático, avisa) |
-
-### 13.3 Trocar `API_URL` depois da migração
-
-O valor só é lido quando o container é **criado**. `docker restart` não aplica
-um valor novo.
-
-```bash
-sudo -u gha-runner nano /opt/gini/<env>/.env        # novo API_URL
-# recriar o frontend: rodar o deploy do frontend com a tag ATUAL
-grep FRONTEND_TAG /opt/gini/<env>/images.env
-gh workflow run deploy.yml -f environment=<env> -f service=frontend -f frontend_tag=<tag atual>
-# (dev: etapa 4, forma a ou b, com a tag atual)
-```
-
-O Compose percebe que a configuração do container mudou e o recria; o
-`deploy.sh` valida o novo valor antes.
 
 ---
 
