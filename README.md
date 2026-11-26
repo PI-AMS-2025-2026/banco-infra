@@ -71,7 +71,7 @@ As portas são configuráveis pelo `.env` de cada ambiente.
 │   ├── deploy.sh                   # deploy com backup, health check e rollback
 │   ├── backup-db.sh                # pg_dump validado + retenção
 │   ├── restore-db.sh               # pg_restore (destrutivo, exige --yes)
-│   ├── lib/frontend-api-url.sh     # imagem única x legado do frontend (usado pelo deploy.sh)
+│   ├── lib/frontend-api-url.sh     # sanidade do frontend: API_URL e rótulo OCI (usado pelo deploy.sh)
 │   ├── tests/                      # testes simulados (sem servidor): bash scripts/tests/<teste>.sh
 │   └── systemd/                    # gini-backup@.service / gini-backup@.timer
 ├── .github/workflows/
@@ -159,16 +159,14 @@ compatíveis com a versão anterior do código —
   backend e no frontend —, nome da branch (`dev`/`staging`/`main`, mutável),
   `X.Y.Z` e `X.Y` quando houver tag git `vX.Y.Z`, e `latest` somente a partir
   de `main`.
-  > **Transição do frontend** ([ADR-012](docs/decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)):
-  > a imagem única `sha-<7>` é a mesma nos três ambientes e recebe a URL da API
-  > pela variável `API_URL` (do `.env` de cada ambiente) em runtime. Até a
-  > Fase B, os workflows e o `deploy.sh` aceitam também o formato **legado**
-  > `sha-<7>-<ambiente>`, com a URL embutida no build
-  > ([ADR-003](docs/decisoes-tecnicas.md#adr-003--deploy-sempre-por-tag-imutável-sha-7)).
-  > Migração passo a passo: [runbook §13](docs/runbook.md#13-migração-para-a-imagem-única-do-frontend).
-- **Requisito da imagem única do frontend:** rótulo OCI
-  `br.fatec.gini.runtime-api-url=true`, e não subir sem `API_URL`. É pelo rótulo
-  que o `deploy.sh` decide exigir `API_URL` antes do `up`.
+  A imagem do frontend é a mesma nos três ambientes e recebe a URL da API pela
+  variável `API_URL` (do `.env` de cada ambiente) em runtime
+  ([ADR-012](docs/decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)).
+- **Requisito da imagem do frontend:** rótulo OCI
+  `br.fatec.gini.runtime-api-url=true`, e não subir sem `API_URL`. O
+  `deploy.sh` recusa, antes do `up`, imagens sem o rótulo.
+- **Variáveis do frontend:** `NODE_ENV=production`, `PORT=3000` e `API_URL`
+  (obrigatória; URL do backend pela qual o navegador o alcança).
 - **Dispatch:** só a branch `dev` envia `repository_dispatch` para este
   repositório — `event_type: image-published`, `client_payload: { service, tag,
   sha, branch }`.
@@ -193,9 +191,7 @@ compatíveis com a versão anterior do código —
 - **Versão do PostgreSQL:** a major é a **17**, a mesma do compose de
   desenvolvimento e do CI do backend. Ao mudar, altere os três lugares.
 - **Nos repos de aplicação:** secret `INFRA_DISPATCH_TOKEN`, variable
-  `INFRA_REPOSITORY` (`owner/repo`). No frontend, a variable
-  `FRONTEND_DISPATCH_UNIFIED=true` é a chave de cutover que faz o dispatch de
-  `dev` enviar a tag da imagem única.
+  `INFRA_REPOSITORY` (`owner/repo`).
 
 ---
 

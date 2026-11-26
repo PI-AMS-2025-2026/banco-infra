@@ -107,7 +107,7 @@ O `deploy.sh` aborta se o modo não for `600` ou se ainda houver `CHANGE_ME`
 | `POSTGRES_PASSWORD` | Senha do PostgreSQL. **Diferente em cada ambiente.** Gere com `openssl rand -base64 32`. | `cGFzc3dvcmQtZmljdGljaWEtbmFvLXVzZQ==` |
 | `JWT_SECRET` | Segredo de assinatura dos JWT do backend. **Diferente em cada ambiente.** Gere com `openssl rand -base64 48`. | `and0LXNlY3JldC1maWN0aWNpby1uYW8tdXNlLWVtLXByb2Q=` |
 | `FRONTEND_URL` | URL pública do frontend do ambiente: esquema + host + porta, **sem barra final e sem caminho**. O backend a usa como origem do CORS **e** como base do link do e-mail de recuperação de senha. Aceita **uma única** origem. **Obrigatória.** | `http://192.168.0.10:3001` / `http://192.168.0.10:3002` / `http://192.168.0.10:3000` |
-| `API_URL` | URL pela qual o **navegador** alcança o backend do ambiente: `http(s)://host[:porta]`, **sem barra final e sem caminho** — a mesma origem do backend do ambiente (porta `BACKEND_PORT`), acessível da máquina do usuário (nada de `localhost` nem do nome do serviço Docker). Lida em runtime pela **imagem única** do frontend (`sha-<7>`), que não sobe sem ela; ignorada pela imagem legado (`sha-<7>-<env>`). O `deploy.sh` a valida com `^https?://[A-Za-z0-9._-]+(:[0-9]{1,5})?$` e **recusa** subir uma imagem única sem ela. Não é segredo (vai parar no JavaScript do navegador). Trocar o valor exige **recriar** o container do frontend (rodar o deploy do frontend de novo). Fase A: opcional; Fase B: obrigatória ([ADR-012](decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)). | `http://192.168.0.10:8081` / `http://192.168.0.10:8082` / `http://192.168.0.10:8080` |
+| `API_URL` | URL pela qual o **navegador** alcança o backend do ambiente: `http(s)://host[:porta]`, **sem barra final e sem caminho** — a mesma origem do backend do ambiente (porta `BACKEND_PORT`), acessível da máquina do usuário (nada de `localhost` nem do nome do serviço Docker). Lida em runtime pelo frontend, que não sobe sem ela. **Obrigatória**: o compose recusa subir sem ela e o `deploy.sh` a valida com `^https?://[A-Za-z0-9._-]+(:[0-9]{1,5})?$` antes de qualquer alteração. Não é segredo (vai parar no JavaScript do navegador). Trocar o valor exige **recriar** o container do frontend ([runbook §4.1](runbook.md#41-trocar-api_url); [ADR-012](decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)). | `http://192.168.0.10:8081` / `http://192.168.0.10:8082` / `http://192.168.0.10:8080` |
 | `SMTP_HOST` | Servidor SMTP do e-mail de recuperação de senha. **Obrigatória** (o backend não sobe sem ela). Em dev/staging com Mailpit: `mailpit` (porta `1025`, `SMTP_AUTH=false`, `SMTP_STARTTLS=false`, usuário e senha vazios). | `smtp.exemplo.com.br` |
 | `SMTP_PORT` | Porta do SMTP. Opcional; padrão `587`. | `587` |
 | `SMTP_AUTH` | Se o SMTP exige autenticação. Opcional; padrão `true`. | `true` |
@@ -135,7 +135,7 @@ Montadas pelo `docker/docker-compose.yml` a partir das acima:
 | `APP_ENVIRONMENT` | `${ENV_NAME}` — compõe o emissor (`iss`) dos JWT e isola os ambientes; mudar o valor invalida os tokens já emitidos |
 | `FRONTEND_URL`, `SMTP_*`, `PASSWORD_RESET_EXPIRATION_MINUTES`, `SWAGGER_ENABLED` | repassadas como estão, com os padrões da tabela acima |
 | `NODE_ENV` / `PORT` (frontend) | fixos em `production` / `3000` |
-| `API_URL` (frontend) | `${API_URL}` do `.env`, repassada como está; vazia se ausente (Fase A) |
+| `API_URL` (frontend) | `${API_URL}` do `.env`, repassada como está (obrigatória) |
 | `POSTGRES_INITDB_ARGS` (db) | fixo em `--encoding=UTF8 --locale=C` |
 
 ---
@@ -148,7 +148,7 @@ para `images.env.previous`, que é a base do rollback automático.
 
 | Nome | Finalidade | Exemplo fictício |
 | --- | --- | --- |
-| `FRONTEND_TAG` | Tag da imagem do frontend em uso. Imagem única: `sha-<7>`, igual nos três ambientes (exige `API_URL` no `.env`). Legado, aceito durante a transição: `sha-<7>-<ambiente>`. | `sha-a1b2c3d` (legado: `sha-a1b2c3d-dev`) |
+| `FRONTEND_TAG` | Tag da imagem do frontend em uso: `sha-<7>`, a mesma nos três ambientes. A imagem precisa ter o rótulo `br.fatec.gini.runtime-api-url=true` (o `deploy.sh` confere). | `sha-a1b2c3d` |
 | `BACKEND_TAG` | Tag da imagem do backend em uso. | `sha-9f8e7d6` |
 
 Tags padrão do **primeiro** deploy (quando o arquivo ainda não existe):
@@ -219,19 +219,14 @@ A publicação no ghcr.io usa o `GITHUB_TOKEN` do próprio repo de aplicação c
 | Nome | Repositório | Finalidade | Exemplo fictício |
 | --- | --- | --- | --- |
 | `INFRA_REPOSITORY` | frontend-nextjs, backend-java | Destino do dispatch, no formato `owner/repo`. | `PI-AMS-2025-2026/banco-infra` |
-| `NEXT_PUBLIC_API_URL_DEV` | frontend-nextjs | URL da API embutida no build **legado** da branch `dev`. **Obsoleta após a Fase B** (a URL passa a vir de `API_URL` no `.env` do servidor). Durante a transição, `API_URL` de cada `.env` deve ter o **mesmo valor** da variable do ambiente. | `http://192.168.0.10:8081` |
-| `NEXT_PUBLIC_API_URL_STAGING` | frontend-nextjs | Idem, branch `staging`. **Obsoleta após a Fase B.** | `http://192.168.0.10:8082` |
-| `NEXT_PUBLIC_API_URL_PRODUCTION` | frontend-nextjs | Idem, branch `main`. **Obsoleta após a Fase B.** | `http://192.168.0.10:8080` |
-| `FRONTEND_DISPATCH_UNIFIED` | frontend-nextjs | **Chave de cutover** da imagem única. Com `true`, o dispatch da branch `dev` passa a enviar a tag única `sha-<7>` em vez de `sha-<7>-dev`, e o deploy automático de dev passa a usar a imagem única. Ausente ou diferente de `true`: comportamento legado. Só ligue depois do passo 4 do [runbook §13](runbook.md#13-migração-para-a-imagem-única-do-frontend). | `true` |
 
-> **Transição ([ADR-012](decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)).**
-> No formato **legado**, o frontend é buildado por ambiente porque `NEXT_PUBLIC_*`
-> é embutido no bundle, e a tag carrega o ambiente (`sha-<7>-dev`,
-> `sha-<7>-staging`, `sha-<7>-production`) — nunca reaproveite a tag legado de
-> um ambiente em outro. A **imagem única** (`sha-<7>`, rótulo OCI
-> `br.fatec.gini.runtime-api-url=true`) é a mesma nos três ambientes e recebe a
-> URL da API por `API_URL` em runtime; ela é promovida de `dev` para `staging`
-> e `production` sem rebuild.
+> O frontend publica **uma** imagem por commit (`sha-<7>`, rótulo OCI
+> `br.fatec.gini.runtime-api-url=true`), a mesma nos três ambientes, que recebe
+> a URL da API por `API_URL` (do `.env` do servidor) em runtime
+> ([ADR-012](decisoes-tecnicas.md#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)). Por isso não há variable de URL da API nos repos de
+> aplicação: as antigas `NEXT_PUBLIC_API_URL_DEV`, `_STAGING`, `_PRODUCTION` e
+> a chave de transição `FRONTEND_DISPATCH_UNIFIED` podem ser apagadas do repo do
+> frontend, se ainda existirem.
 
 ---
 
@@ -246,10 +241,8 @@ A publicação no ghcr.io usa o `GITHUB_TOKEN` do próprio repo de aplicação c
       nenhum `CHANGE_ME` e com senhas/segredos **distintos por ambiente**.
 - [ ] Secret `INFRA_DISPATCH_TOKEN` e variable `INFRA_REPOSITORY` configurados
       nos dois repos de aplicação.
-- [ ] `API_URL` definida no `.env` de cada ambiente (obrigatória para a imagem
-      única do frontend; igual à `NEXT_PUBLIC_API_URL_<ENV>` correspondente).
-- [ ] Variables `NEXT_PUBLIC_API_URL_*` configuradas no repo do frontend
-      (enquanto houver imagens legado; obsoletas após a Fase B).
+- [ ] `API_URL` definida no `.env` de cada ambiente (obrigatória; URL do
+      backend do ambiente, acessível pelo navegador).
 - [ ] `git ls-files | grep -E '(^|/)\.env$'` sem resultado.
 
 ---

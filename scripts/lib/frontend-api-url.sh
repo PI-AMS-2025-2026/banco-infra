@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
 #
-# frontend-api-url.sh — Funções de suporte à imagem ÚNICA do frontend (URL da
-# API recebida em runtime pela variável API_URL). Ver ADR-012.
+# frontend-api-url.sh — Funções de sanidade para a imagem do frontend, que
+# recebe a URL da API em runtime pela variável API_URL (ADR-012).
 #
 # Biblioteca: é carregada com `source` pelo scripts/deploy.sh e pelo teste
 # scripts/tests/test-frontend-api-url.sh. Não executa nada sozinha e não
 # altera opções do shell de quem a carrega.
-#
-# Os dois tipos de imagem do frontend:
-#   unica   rótulo OCI br.fatec.gini.runtime-api-url=true; lê API_URL no
-#           startup e não sobe sem ela.
-#   legado  sem o rótulo; a URL da API vem embutida no build e API_URL é
-#           ignorada.
 
-# Rótulo OCI publicado pelo repositório do frontend na imagem única.
+# Rótulo OCI publicado pelo repositório do frontend na imagem que lê API_URL.
 ROTULO_RUNTIME_API_URL='br.fatec.gini.runtime-api-url'
 
 # Formato aceito para API_URL: esquema + host + porta opcional, sem barra
@@ -26,61 +20,22 @@ api_url_valida() {
   [[ "$1" =~ ${REGEX_API_URL} ]]
 }
 
-# tipo_imagem_frontend <imagem:tag>
-#   Imprime `unica` ou `legado` a partir dos rótulos da imagem LOCAL (rodar
-#   depois do pull). Retorna 1 se a imagem não puder ser inspecionada.
+# frontend_le_api_url <imagem:tag>
+#   Confere, na imagem LOCAL (rodar depois do pull), o rótulo
+#   br.fatec.gini.runtime-api-url=true. Retorna:
+#     0  rótulo presente: a imagem lê API_URL no startup;
+#     1  rótulo ausente: imagem antiga, com a URL da API embutida no build —
+#        API_URL seria ignorada e o navegador chamaria a API errada;
+#     2  a imagem não pôde ser inspecionada.
 #
 #   O template percorre os rótulos com `range` em vez de `index`: `range` sobre
 #   um mapa nulo (imagem sem rótulo nenhum) simplesmente não itera, enquanto
 #   `index` pode falhar. A referência vai como argumento, nunca interpolada.
-tipo_imagem_frontend() {
+frontend_le_api_url() {
   local referencia="$1" rotulos
   rotulos="$(docker image inspect \
                --format '{{ range $k, $v := .Config.Labels }}{{ $k }}={{ $v }}{{ "\n" }}{{ end }}' \
-               -- "${referencia}" 2>/dev/null)" || return 1
+               -- "${referencia}" 2>/dev/null)" || return 2
 
-  if printf '%s\n' "${rotulos}" | grep -qxF -- "${ROTULO_RUNTIME_API_URL}=true"; then
-    printf 'unica'
-  else
-    printf 'legado'
-  fi
-}
-
-# avaliar_api_url_frontend <tipo> <api_url>
-#   Decide se o deploy pode seguir. Imprime um código e retorna 0 (segue) ou
-#   1 (bloqueia). Quem chama traduz o código em mensagem.
-#
-#   tipo=unica,  API_URL vazia        -> ERRO_AUSENTE          (1)
-#   tipo=unica,  API_URL inválida     -> ERRO_INVALIDA         (1)
-#   tipo=unica,  API_URL válida       -> OK_UNICA              (0)
-#   tipo=legado, API_URL vazia        -> OK_LEGADO             (0)
-#   tipo=legado, API_URL válida       -> OK_LEGADO_IGNORADA    (0)
-#   tipo=legado, API_URL inválida     -> AVISO_LEGADO_INVALIDA (0)
-#   outro tipo                        -> ERRO_TIPO             (1)
-avaliar_api_url_frontend() {
-  local tipo="$1" api_url="$2"
-
-  case "${tipo}" in
-    unica)
-      if [[ -z "${api_url}" ]]; then
-        printf 'ERRO_AUSENTE'; return 1
-      elif ! api_url_valida "${api_url}"; then
-        printf 'ERRO_INVALIDA'; return 1
-      fi
-      printf 'OK_UNICA'; return 0
-      ;;
-    legado)
-      if [[ -z "${api_url}" ]]; then
-        printf 'OK_LEGADO'
-      elif api_url_valida "${api_url}"; then
-        printf 'OK_LEGADO_IGNORADA'
-      else
-        printf 'AVISO_LEGADO_INVALIDA'
-      fi
-      return 0
-      ;;
-    *)
-      printf 'ERRO_TIPO'; return 1
-      ;;
-  esac
+  printf '%s\n' "${rotulos}" | grep -qxF -- "${ROTULO_RUNTIME_API_URL}=true"
 }

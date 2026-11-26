@@ -63,7 +63,8 @@ Alternativas: Docker Hub, ghcr.io, Amazon ECR, registry auto-hospedado.
 
 ## ADR-003 — Deploy sempre por tag imutável `sha-<7>`
 
-**Status:** Aceita · **Data:** 2026-10-08
+**Status:** Aceita (a atualização de 2026-11-13 foi **substituída** pelo
+[ADR-012](#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime) em 2026-11-26) · **Data:** 2026-10-08
 
 **Contexto.** A pipeline publica várias tags: `sha-<7 chars>`, nome da branch
 (`dev`/`staging`/`main`), `X.Y.Z` e `X.Y` em tag git, e `latest` a partir de
@@ -85,28 +86,13 @@ primeiro deploy** de um ambiente, quando ainda não existe `images.env`
 - Custo: quem dispara um deploy manual precisa copiar a tag de algum lugar
   (Actions do repo de aplicação, ou a aba *Packages*).
 
-**Atualização (2026-11-13) — sufixo de ambiente no frontend.**
-
-> **Substituída por [ADR-012](#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime)
-> (após a Fase B).** Durante a transição (Fase A) os dois formatos de tag do
-> frontend convivem: `sha-<7>` (imagem única) e `sha-<7>-<ambiente>` (legado,
-> descrito abaixo). O restante deste ADR — deploy sempre por tag imutável —
-> continua valendo.
-
-A imagem do
-frontend embute `NEXT_PUBLIC_API_URL` no build, então cada ambiente tem uma
-imagem diferente. Um mesmo commit pode ser buildado em mais de uma branch
-(fast-forward ou rebase-merge de `dev` para `staging`/`main`); com só
-`sha-<7>`, o segundo build **sobrescreveria** a tag com outra URL embutida, e
-a tag deixaria de ser imutável na prática. Por isso o frontend publica
-`sha-<7>-<ambiente>` (ex.: `sha-a1b2c3d-dev`, `sha-a1b2c3d-staging`,
-`sha-a1b2c3d-production`). O backend continua em `sha-<7>`: sua imagem é a
-mesma em todos os ambientes. Nenhuma mudança de código foi necessária aqui —
-a regex `^[A-Za-z0-9_.-]{1,128}$` já aceita o novo formato.
-
-- Ao fazer deploy manual de uma imagem **legado** do frontend, use **sempre** a
-  tag do ambiente de destino (`-staging` para staging, `-production` para
-  production). A imagem única (`sha-<7>`, ADR-012) é a mesma nos três.
+**Atualização (2026-11-13) — tag por ambiente no frontend. Substituída pelo
+[ADR-012](#adr-012--imagem-única-do-frontend-com-url-da-api-em-runtime) em
+2026-11-26.** Enquanto a URL da API era embutida no build, o frontend publicava
+uma tag por ambiente para que builds do mesmo commit em branches diferentes não
+se sobrescrevessem. Com a URL da API lida em runtime, o frontend voltou a
+publicar uma única tag `sha-<7>`, como o backend, e a decisão principal deste
+ADR — deploy sempre por tag imutável — vale igualmente para os dois.
 
 ---
 
@@ -363,14 +349,14 @@ ambiente liga com `COMPOSE_PROFILES=mailpit` no seu `.env`: os `.env.example` de
 
 ## ADR-012 — Imagem única do frontend com URL da API em runtime
 
-**Status:** Aceita — Fase A (transição) · **Data:** 2026-11-23 · **Substitui:**
-a atualização de 2026-11-13 do [ADR-003](#adr-003--deploy-sempre-por-tag-imutável-sha-7)
-(tags por ambiente), após a Fase B
+**Status:** Aceita · **Data:** 2026-11-23 (transição concluída em 2026-11-26) ·
+**Substitui:** a atualização de 2026-11-13 do
+[ADR-003](#adr-003--deploy-sempre-por-tag-imutável-sha-7) (tag por ambiente)
 
 **Contexto.** O Next.js embute as variáveis `NEXT_PUBLIC_*` no bundle durante o
 build. Por isso o frontend era buildado **uma vez por ambiente**, com a URL da
 API de cada um (`NEXT_PUBLIC_API_URL_<ENV>` no repo do frontend), e publicado
-como `sha-<7>-<ambiente>` (ADR-003). Efeitos colaterais:
+com uma tag por ambiente (ADR-003). Efeitos colaterais:
 
 - três builds por commit, e nenhuma garantia de que o que foi testado em `dev` é
   o mesmo artefato que vai para `staging`/`production` — não existe promoção;
@@ -389,55 +375,49 @@ como `sha-<7>-<ambiente>` (ADR-003). Efeitos colaterais:
 2. `API_URL` mora no `.env` de cada ambiente no servidor e é repassada ao
    container pelo `docker-compose.yml`. É a URL pela qual o **navegador**
    alcança o backend do ambiente (`http(s)://host[:porta]`, sem barra final).
-3. O `deploy.sh`, depois do `pull` e **antes** do `up`, lê o rótulo da imagem do
-   frontend:
-   - rótulo `true` e `API_URL` ausente ou fora do formato
-     `^https?://[A-Za-z0-9._-]+(:[0-9]{1,5})?$` → aborta sem tocar no ambiente
-     no ar;
-   - sem o rótulo (imagem legado) → segue como antes; `API_URL`, se houver, é
-     ignorada e isso só é registrado no log.
-   O tipo implantado (`legado`/`unica`) vai para o `releases.log`.
-4. Migração em duas fases:
-   - **Fase A (atual):** `API_URL` opcional no compose (`${API_URL:-}`); os dois
-     formatos de tag convivem e `.env` antigos continuam válidos.
-   - **Fase B (pendente de confirmação do grupo):** `API_URL` obrigatória no
-     compose (`${API_URL:?...}`) e documentação só com `sha-<7>`.
-
-Procedimento passo a passo, com reversão por etapa:
-[runbook §13](runbook.md#13-migração-para-a-imagem-única-do-frontend).
+3. `API_URL` é **obrigatória**: o compose a declara como `${API_URL:?...}`.
+4. O `deploy.sh` faz duas verificações de sanidade, ambas sem tocar no
+   ambiente no ar:
+   - **antes de qualquer alteração** (backup, `images.env`), `API_URL` precisa
+     estar no `.env` e casar com `^https?://[A-Za-z0-9._-]+(:[0-9]{1,5})?$`;
+   - **depois do `pull` e antes do `up`**, a imagem do frontend precisa ter o
+     rótulo `br.fatec.gini.runtime-api-url=true`. Sem ele, a imagem seria uma
+     das antigas, com a URL embutida no build: subiria `healthy`, ignoraria
+     `API_URL` e o navegador chamaria a API de outro ambiente. O deploy aborta.
+5. Imagens antigas (com a URL embutida) **não são mais suportadas**, nem como
+   alvo de rollback manual. A migração foi feita em duas fases (2026-11-23 e
+   2026-11-26), com um período em que os dois formatos conviviam.
 
 **Consequências.**
 
 - **Um build por commit**, e a mesma imagem testada em `dev` é promovida para
   `staging` e `production` — e pode ser usada, sem rebuild, em qualquer outro
-  destino (servidor local ou AWS).
-- **Rollback entre formatos funciona:** `images.env.previous` guarda só tags, e
-  `API_URL` continua no `.env`. Voltar de uma imagem única para uma legado é
-  sempre seguro (a legado ignora `API_URL`); voltar para uma única exige
-  `API_URL` válida no `.env` — o `deploy.sh` avisa no rollback se faltar.
+  destino (servidor local ou AWS, [ADR-013](#adr-013--implantação-na-aws-learner-lab-um-ambiente-de-homologação-por-conta-bootstrap-por-script)).
+- **Rollback só entre imagens com o rótulo.** `images.env.previous` guarda só
+  tags e `API_URL` continua no `.env`. Um deploy manual para uma tag antiga é
+  recusado pela verificação do rótulo; o rollback automático volta para a tag
+  que estava no ar, sem nova verificação.
 - **Trocar `API_URL` exige recriar o container do frontend.** O valor só é lido
   na criação do container; `docker restart` não basta. Rodar o deploy do
   frontend de novo (mesmo com a mesma tag) recria, porque o Compose detecta a
   mudança de configuração.
-- Na Fase A, o primeiro deploy de cada ambiente recria o container do frontend
-  uma vez, mesmo com imagem legado, porque a configuração dele ganhou a
-  variável `API_URL` (vazia). É inofensivo.
+- **Deploy só do backend também verifica o frontend**: o `deploy.sh` confere a
+  tag do frontend que vai ficar no ar. Um ambiente que ainda esteja com imagem
+  antiga precisa receber primeiro um deploy do frontend.
 - `API_URL` **não é segredo**: ela acaba no JavaScript entregue ao navegador.
   Pode ficar no `.env` junto com os segredos, mas não precisa de rotação.
 - O CORS continua sendo controlado por `FRONTEND_URL` no backend; `API_URL` não
   muda o que o backend aceita.
-- A verificação depende do rótulo OCI: uma imagem única publicada **sem** o
-  rótulo seria tratada como legado e, sem `API_URL`, falharia só no
-  healthcheck (com rollback automático). O rótulo faz parte do contrato entre
-  os repositórios.
-- As variables `NEXT_PUBLIC_API_URL_<ENV>` do repo do frontend ficam obsoletas
-  após a Fase B.
+- O rótulo OCI faz parte do contrato entre os repositórios: uma imagem publicada
+  sem ele é recusada pelo deploy, mesmo que leia `API_URL`.
+- As variables `NEXT_PUBLIC_API_URL_<ENV>` do repo do frontend deixaram de ser
+  usadas.
 
 **Alternativas descartadas.**
 
 | Alternativa | Por que não |
 | --- | --- |
-| Manter o build por ambiente (`sha-<7>-<env>`) | Três builds por commit, sem promoção do artefato testado e com o risco de imagem trocada entre ambientes. |
+| Manter o build por ambiente (uma tag por ambiente) | Três builds por commit, sem promoção do artefato testado e com o risco de imagem trocada entre ambientes. |
 | URL relativa (`/api`) atrás de um proxy reverso no mesmo domínio | Exige proxy reverso, fora do escopo desta fase ([ADR-007](#adr-007--escopo-desta-fase-servidor-local-sem-aws-tls-ou-monitoramento)). Pode voltar à mesa quando houver TLS. |
 | *Rewrites* do Next.js encaminhando `/api` ao backend | O servidor Next.js passaria a intermediar todo o tráfego da API (mais um salto, timeouts e cabeçalhos a tratar) e o frontend precisaria alcançar o backend pela rede interna — muda o modelo de CORS e de rede do compose. |
 | Frontend busca a configuração em runtime (`/config.json`) antes de chamar a API | Mudança maior no código da aplicação (toda chamada passa a depender de uma requisição prévia) para o mesmo resultado do placeholder. |
