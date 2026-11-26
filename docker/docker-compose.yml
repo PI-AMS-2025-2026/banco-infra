@@ -180,12 +180,9 @@ services:
       br.fatec.gini.service: backend
 
   # -------------------------------------------------------------------------
-  # Frontend — Next.js 16. Convivem dois tipos de imagem (transição, ADR-012):
-  #   - LEGADO  (tag sha-<7>-<env>): a URL da API vem embutida no build, então
-  #     a imagem é específica do ambiente e ignora API_URL;
-  #   - ÚNICA   (tag sha-<7>, rótulo br.fatec.gini.runtime-api-url=true): a
-  #     mesma imagem serve os três ambientes e lê a URL da API de API_URL no
-  #     startup. Sem API_URL ela não sobe (falha rápida).
+  # Frontend — Next.js 16. Uma única imagem por commit (tag sha-<7>, rótulo
+  # br.fatec.gini.runtime-api-url=true) serve os três ambientes: a URL da API
+  # é lida de API_URL no startup (ADR-012). Sem API_URL ela não sobe.
   # -------------------------------------------------------------------------
   frontend:
     image: ${FRONTEND_IMAGE:?defina FRONTEND_IMAGE no .env}:${FRONTEND_TAG:?defina FRONTEND_TAG no images.env}
@@ -198,14 +195,10 @@ services:
       NODE_ENV: production
       PORT: "3000"
       # URL pela qual o NAVEGADOR alcança o backend deste ambiente (esquema +
-      # host + porta, sem barra final). Lida em runtime pela imagem única;
-      # ignorada pela imagem legado. É lida só na criação do container: depois
-      # de alterá-la no .env, o container do frontend precisa ser RECRIADO
-      # (rodar o deploy do frontend de novo basta).
-      # FASE A (agora): opcional, para não quebrar .env antigos. O deploy.sh
-      # recusa subir uma imagem única sem API_URL válida.
-      # FASE B: passa a ser obrigatória (${API_URL:?...}).
-      API_URL: ${API_URL:-}
+      # host + porta, sem barra final). OBRIGATÓRIA. É lida só na criação do
+      # container: depois de alterá-la no .env, o container do frontend
+      # precisa ser RECRIADO (rodar o deploy do frontend de novo basta).
+      API_URL: ${API_URL:?defina API_URL no .env (URL do backend para o navegador, ex. http://192.168.0.10:8081)}
     ports:
       - "${FRONTEND_PORT:?defina FRONTEND_PORT no .env}:3000"
     networks:

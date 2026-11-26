@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# test-frontend-api-url.sh — Testa, em modo simulado, a decisão do deploy.sh
-# sobre a imagem do frontend (única x legado) e a validação de API_URL.
+# test-frontend-api-url.sh — Testa, em modo simulado, as verificações de
+# sanidade do deploy.sh sobre o frontend: formato de API_URL e rótulo OCI
+# br.fatec.gini.runtime-api-url=true da imagem (ADR-012).
 # Não toca no servidor, não sobe container e não precisa de rede.
 #
 # Uso (na raiz do repositório):
@@ -38,31 +39,6 @@ conferir() {
   fi
 }
 
-# Executa avaliar_api_url_frontend e devolve "<codigo>/<status>".
-avaliar() {
-  local codigo status=0
-  codigo="$(avaliar_api_url_frontend "$1" "$2")" || status=$?
-  printf '%s/%s' "${codigo}" "${status}"
-}
-
-# --------------------------------------------------------------------------- #
-printf '\n== Cenários do deploy (tipo da imagem x API_URL no .env)\n'
-# --------------------------------------------------------------------------- #
-conferir "única sem API_URL -> erro, bloqueia o up" \
-  "ERRO_AUSENTE/1" "$(avaliar unica '')"
-conferir "única com API_URL inválida -> erro, bloqueia o up" \
-  "ERRO_INVALIDA/1" "$(avaliar unica 'http://192.168.0.10:8081/')"
-conferir "única com API_URL válida -> segue" \
-  "OK_UNICA/0" "$(avaliar unica 'http://192.168.0.10:8081')"
-conferir "legado sem API_URL -> segue (comportamento atual)" \
-  "OK_LEGADO/0" "$(avaliar legado '')"
-conferir "legado com API_URL -> segue, só log 'ignorada'" \
-  "OK_LEGADO_IGNORADA/0" "$(avaliar legado 'http://192.168.0.10:8081')"
-conferir "legado com API_URL inválida -> segue, com aviso" \
-  "AVISO_LEGADO_INVALIDA/0" "$(avaliar legado 'localhost:8081')"
-conferir "tipo desconhecido -> bloqueia" \
-  "ERRO_TIPO/1" "$(avaliar '?' 'http://192.168.0.10:8081')"
-
 # --------------------------------------------------------------------------- #
 printf '\n== Formato de API_URL (%s)\n' "${REGEX_API_URL}"
 # --------------------------------------------------------------------------- #
@@ -94,7 +70,7 @@ for url in \
 done
 
 # --------------------------------------------------------------------------- #
-printf '\n== Leitura do rótulo OCI (docker simulado)\n'
+printf '\n== Rótulo OCI da imagem do frontend (docker simulado)\n'
 # --------------------------------------------------------------------------- #
 DIR_TMP="$(mktemp -d)"
 trap 'rm -rf "${DIR_TMP}"' EXIT
@@ -105,8 +81,8 @@ cat > "${DIR_TMP}/docker" <<'SIMULADO'
 #!/usr/bin/env bash
 ref="${*: -1}"
 case "${ref}" in
-  *:unica)       printf 'org.opencontainers.image.source=x\nbr.fatec.gini.runtime-api-url=true\n' ;;
-  *:legado)      printf 'org.opencontainers.image.source=x\n' ;;
+  *:com-rotulo)  printf 'org.opencontainers.image.source=x\nbr.fatec.gini.runtime-api-url=true\n' ;;
+  *:antiga)      printf 'org.opencontainers.image.source=x\n' ;;
   *:sem-rotulos) printf '' ;;
   *:falso)       printf 'br.fatec.gini.runtime-api-url=false\n' ;;
   *:parecido)    printf 'br.fatec.gini.runtime-api-url=true-ish\nxbr.fatec.gini.runtime-api-url=true\n' ;;
@@ -115,40 +91,41 @@ esac
 SIMULADO
 chmod +x "${DIR_TMP}/docker"
 
-tipo_simulado() {
-  local tipo status=0
-  tipo="$(PATH="${DIR_TMP}:${PATH}" tipo_imagem_frontend "$1")" || status=$?
-  printf '%s/%s' "${tipo}" "${status}"
+# Executa frontend_le_api_url e devolve o código de saída.
+status_simulado() {
+  local status=0
+  PATH="${DIR_TMP}:${PATH}" frontend_le_api_url "$1" || status=$?
+  printf '%s' "${status}"
 }
 
-conferir "rótulo =true            -> unica"  "unica/0"  "$(tipo_simulado ghcr.io/o/frontend:unica)"
-conferir "sem o rótulo            -> legado" "legado/0" "$(tipo_simulado ghcr.io/o/frontend:legado)"
-conferir "imagem sem rótulo algum -> legado" "legado/0" "$(tipo_simulado ghcr.io/o/frontend:sem-rotulos)"
-conferir "rótulo =false           -> legado" "legado/0" "$(tipo_simulado ghcr.io/o/frontend:falso)"
-conferir "rótulo só parecido      -> legado" "legado/0" "$(tipo_simulado ghcr.io/o/frontend:parecido)"
-conferir "inspect falha           -> status 1" "/1"     "$(tipo_simulado ghcr.io/o/frontend:inexistente)"
+conferir "rótulo =true            -> 0 (segue)"     "0" "$(status_simulado ghcr.io/o/frontend:com-rotulo)"
+conferir "sem o rótulo            -> 1 (bloqueia)"  "1" "$(status_simulado ghcr.io/o/frontend:antiga)"
+conferir "imagem sem rótulo algum -> 1 (bloqueia)"  "1" "$(status_simulado ghcr.io/o/frontend:sem-rotulos)"
+conferir "rótulo =false           -> 1 (bloqueia)"  "1" "$(status_simulado ghcr.io/o/frontend:falso)"
+conferir "rótulo só parecido      -> 1 (bloqueia)"  "1" "$(status_simulado ghcr.io/o/frontend:parecido)"
+conferir "inspect falha           -> 2 (bloqueia)"  "2" "$(status_simulado ghcr.io/o/frontend:inexistente)"
 
 # --------------------------------------------------------------------------- #
 if [[ "${COM_DOCKER}" -eq 1 ]]; then
-  printf '\n== Leitura do rótulo OCI (docker real, imagens FROM scratch)\n'
+  printf '\n== Rótulo OCI da imagem do frontend (docker real, imagens FROM scratch)\n'
   # Nomes fixos e locais (sem registry): nada é enviado para fora.
-  IMG_UNICA='gini-teste/frontend-rotulo:unica'
-  IMG_LEGADO='gini-teste/frontend-rotulo:legado'
-  trap 'docker image rm -f "${IMG_UNICA}" "${IMG_LEGADO}" >/dev/null 2>&1 || true; rm -rf "${DIR_TMP}"' EXIT
+  IMG_COM='gini-teste/frontend-rotulo:com-rotulo'
+  IMG_SEM='gini-teste/frontend-rotulo:sem-rotulos'
+  trap 'docker image rm -f "${IMG_COM}" "${IMG_SEM}" >/dev/null 2>&1 || true; rm -rf "${DIR_TMP}"' EXIT
 
   printf 'FROM scratch\nLABEL br.fatec.gini.runtime-api-url=true\n' \
-    | docker build -q -t "${IMG_UNICA}" - >/dev/null
-  printf 'FROM scratch\n' > "${DIR_TMP}/Dockerfile.legado"
-  docker build -q -t "${IMG_LEGADO}" -f "${DIR_TMP}/Dockerfile.legado" "${DIR_TMP}" >/dev/null
+    | docker build -q -t "${IMG_COM}" - >/dev/null
+  printf 'FROM scratch\n' > "${DIR_TMP}/Dockerfile.sem"
+  docker build -q -t "${IMG_SEM}" -f "${DIR_TMP}/Dockerfile.sem" "${DIR_TMP}" >/dev/null
 
-  tipo_real() {
-    local tipo status=0
-    tipo="$(tipo_imagem_frontend "$1")" || status=$?
-    printf '%s/%s' "${tipo}" "${status}"
+  status_real() {
+    local status=0
+    frontend_le_api_url "$1" || status=$?
+    printf '%s' "${status}"
   }
-  conferir "imagem real com rótulo  -> unica"    "unica/0"  "$(tipo_real "${IMG_UNICA}")"
-  conferir "imagem real sem rótulos -> legado"   "legado/0" "$(tipo_real "${IMG_LEGADO}")"
-  conferir "imagem real inexistente -> status 1" "/1"       "$(tipo_real gini-teste/frontend-rotulo:nao-existe)"
+  conferir "imagem real com rótulo  -> 0" "0" "$(status_real "${IMG_COM}")"
+  conferir "imagem real sem rótulos -> 1" "1" "$(status_real "${IMG_SEM}")"
+  conferir "imagem real inexistente -> 2" "2" "$(status_real gini-teste/frontend-rotulo:nao-existe)"
 fi
 
 printf '\n%d caso(s), %d falha(s).\n' "${TOTAL}" "${FALHAS}"

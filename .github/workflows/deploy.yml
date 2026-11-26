@@ -4,11 +4,8 @@
 # Dev é automático (deploy-dev.yml, via repository_dispatch). Staging e produção
 # são sempre manuais (migrations do Flyway e aprovação humana).
 #
-# Tag do frontend — dois formatos aceitos durante a transição (ADR-012):
-#   sha-a1b2c3d          imagem ÚNICA: a mesma de dev é promovida; a URL da
-#                        API vem de API_URL no .env do servidor.
-#   sha-a1b2c3d-staging  LEGADO: buildada por ambiente (URL da API embutida);
-#                        precisa vir da branch correta (`staging` / `main`).
+# Tag do frontend: sha-a1b2c3d — a mesma imagem validada em dev é promovida;
+# a URL da API vem de API_URL no .env do servidor (ADR-012).
 #
 # Como disparar:
 #   Actions -> "Deploy manual (staging/production)" -> Run workflow
@@ -47,7 +44,7 @@ on:
           - backend
           - both
       frontend_tag:
-        description: "Tag da imagem do frontend: sha-a1b2c3d (imagem única, exige API_URL no .env) ou, legado, sha-a1b2c3d-<ambiente>. Obrigatória se service = frontend ou both."
+        description: "Tag da imagem do frontend (ex.: sha-a1b2c3d; a URL da API vem de API_URL no .env do servidor). Obrigatória se service = frontend ou both."
         required: false
         type: string
       backend_tag:

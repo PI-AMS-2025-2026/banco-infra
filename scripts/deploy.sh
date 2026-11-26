@@ -8,7 +8,7 @@
 #
 # Uso:
 #   BACKEND_TAG=sha-a1b2c3d ./scripts/deploy.sh dev
-#   FRONTEND_TAG=sha-1111111-staging BACKEND_TAG=sha-2222222 ./scripts/deploy.sh staging
+#   FRONTEND_TAG=sha-1111111 BACKEND_TAG=sha-2222222 ./scripts/deploy.sh staging
 #
 # ENTRADAS — todas por variável de ambiente; nenhum valor externo é interpolado
 # em comando sem passar pelas validações de regex abaixo.
@@ -27,19 +27,19 @@
 #   GINI_ROOT         raiz dos ambientes no servidor (padrão /opt/gini)
 #
 # LIDO DO .env do ambiente (nunca do ambiente do shell):
-#   API_URL           URL da API para a imagem ÚNICA do frontend (ADR-012).
-#                     Depois do pull o script inspeciona o rótulo
-#                     br.fatec.gini.runtime-api-url da imagem do frontend:
-#                       - imagem única sem API_URL válida -> aborta ANTES do up;
-#                       - imagem legado -> API_URL é ignorada (só log).
+#   API_URL           URL pela qual o navegador alcança o backend, lida em
+#                     runtime pelo frontend (ADR-012). Obrigatória: o formato é
+#                     validado antes de qualquer alteração no servidor. Depois
+#                     do pull, a imagem do frontend precisa ter o rótulo
+#                     br.fatec.gini.runtime-api-url=true; sem ele o deploy
+#                     aborta ANTES do up.
 #
 # EFEITOS no servidor, em /opt/gini/<env>/:
 #   docker-compose.yml       sincronizado a partir deste repositório
 #   images.env               reescrito com as tags do deploy
 #   images.env.previous      tags do último deploy bem-sucedido (rollback)
 #   .deploy-ok               marcador de que já houve um deploy bem-sucedido
-#   releases.log             histórico (data/hora, tags, tipo da imagem do
-#                            frontend — legado|unica —, resultado)
+#   releases.log             histórico (data/hora, tags, resultado)
 #
 set -euo pipefail
 
@@ -62,7 +62,7 @@ REGEX_TAG='^[A-Za-z0-9_.-]{1,128}$'
 
 RAIZ_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Imagem única x legado do frontend (rótulo OCI e validação de API_URL).
+# Sanidade do frontend: formato de API_URL e rótulo OCI da imagem.
 # shellcheck source=scripts/lib/frontend-api-url.sh
 source "${RAIZ_REPO}/scripts/lib/frontend-api-url.sh"
 
@@ -211,17 +211,16 @@ BACKEND_PORT="$(ler_variavel_env "${ARQUIVO_ENV}" BACKEND_PORT)"
 [[ "${FRONTEND_PORT}" =~ ^[0-9]{1,5}$ && "${BACKEND_PORT}" =~ ^[0-9]{1,5}$ ]] \
   || morrer "FRONTEND_PORT/BACKEND_PORT inválidos em ${ARQUIVO_ENV}."
 
-# API_URL (imagem única do frontend). A fonte da verdade é o .env: se viesse
+# API_URL (frontend, ADR-012). A fonte da verdade é o .env: se viesse
 # exportada no shell, teria precedência sobre --env-file na interpolação do
 # Compose e o container receberia um valor diferente do que validamos aqui.
-# A validação propriamente dita acontece depois do pull, quando já se sabe se
-# a imagem do frontend é única ou legado (seção 7.1).
+# Validada aqui, antes do backup e de qualquer alteração: o compose também a
+# exige (${API_URL:?}), mas falharia com uma mensagem menos clara.
 API_URL_NO_ENV="$(ler_variavel_env "${ARQUIVO_ENV}" API_URL)"
 unset API_URL
 
-# Tipo da imagem do frontend (legado|unica), registrado no releases.log.
-# Fica `?` enquanto a imagem não foi inspecionada (falhas antes do pull).
-TIPO_FRONTEND='?'
+[[ -n "${API_URL_NO_ENV}" ]]   || morrer "API_URL não definida em ${ARQUIVO_ENV}. Defina a URL pela qual o navegador alcança o backend (ex.: API_URL=http://192.168.0.10:${BACKEND_PORT})."
+api_url_valida "${API_URL_NO_ENV}"   || morrer "API_URL inválida em ${ARQUIVO_ENV}: '${API_URL_NO_ENV}'. Esperado ${REGEX_API_URL} (sem barra final, sem caminho)."
 
 # Mailpit (opcional): sobe quando COMPOSE_PROFILES do .env contém `mailpit`.
 # Em production ele engoliria os e-mails reais dos usuários, então é recusado.
@@ -249,9 +248,9 @@ compose() {
 # Grava uma linha no histórico de releases do ambiente.
 registrar_release() {
   local resultado="$1" detalhe="${2:-}"
-  printf '%s | env=%s | frontend=%s | frontend_tipo=%s | backend=%s | resultado=%s%s\n' \
+  printf '%s | env=%s | frontend=%s | backend=%s | resultado=%s%s\n' \
     "$(date --iso-8601=seconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S%z)" \
-    "${ENV_NAME}" "${TAG_FRONTEND_NOVA}" "${TIPO_FRONTEND}" "${TAG_BACKEND_NOVA}" \
+    "${ENV_NAME}" "${TAG_FRONTEND_NOVA}" "${TAG_BACKEND_NOVA}" \
     "${resultado}" "${detalhe:+ | ${detalhe}}" \
     >> "${ARQUIVO_RELEASES}"
   chmod 640 "${ARQUIVO_RELEASES}" 2>/dev/null || true
@@ -400,20 +399,6 @@ executar_rollback() {
   cp -p "${ARQUIVO_IMAGES_ANTERIOR}" "${ARQUIVO_IMAGES}"
   log "tags restauradas: frontend=${TAG_FRONTEND_ATUAL} backend=${TAG_BACKEND_ATUAL}"
 
-  # images.env.previous guarda só tags; API_URL continua vindo do .env. Voltar
-  # de uma imagem única para uma legado é sempre seguro (a legado ignora
-  # API_URL). O inverso só funciona se o .env ainda tiver API_URL válida —
-  # caso contrário avisamos, mas tentamos mesmo assim (não há alternativa).
-  local tipo_anterior
-  if tipo_anterior="$(tipo_imagem_frontend "${FRONTEND_IMAGE}:${TAG_FRONTEND_ATUAL}")"; then
-    log "frontend do rollback: imagem ${tipo_anterior}"
-    if ! avaliar_api_url_frontend "${tipo_anterior}" "${API_URL_NO_ENV}" >/dev/null; then
-      aviso "a imagem anterior do frontend é ÚNICA e API_URL em ${ARQUIVO_ENV} está ausente/inválida:"
-      aviso "o frontend provavelmente não subirá no rollback. Corrija API_URL e rode o deploy de novo."
-    fi
-  else
-    log "imagem anterior do frontend não está no host (o compose a baixará); tipo não verificado."
-  fi
 
   if ! compose up -d --remove-orphans; then
     erro "o rollback falhou ao subir os containers."
@@ -467,54 +452,32 @@ fi
 ok "imagens disponíveis localmente"
 
 # --------------------------------------------------------------------------- #
-# 7.1 Imagem do frontend: única (API_URL em runtime) ou legado — ADR-012
-# Roda ANTES do up: uma imagem única sem API_URL não sobe, e descobrir isso
-# só pelo healthcheck custaria um rollback. Aqui o ambiente no ar não é tocado.
+# 7.1 Sanidade da imagem do frontend — ADR-012
+# A imagem precisa ler API_URL em runtime (rótulo OCI). Uma imagem antiga,
+# com a URL da API embutida no build, subiria healthy mas ignoraria API_URL —
+# o navegador chamaria a API de outro ambiente. Roda ANTES do up: o ambiente
+# no ar não é tocado.
 # --------------------------------------------------------------------------- #
-abortar_antes_do_up() {
-  local motivo_log="$1"
+REFERENCIA_FRONTEND="${FRONTEND_IMAGE}:${TAG_FRONTEND_NOVA}"
+status_rotulo=0
+frontend_le_api_url "${REFERENCIA_FRONTEND}" || status_rotulo=$?
+
+if [[ "${status_rotulo}" -ne 0 ]]; then
+  if [[ "${status_rotulo}" -eq 1 ]]; then
+    erro "a imagem ${REFERENCIA_FRONTEND} não tem o rótulo ${ROTULO_RUNTIME_API_URL}=true:"
+    erro "ela não lê API_URL (URL da API embutida no build) e não é mais suportada."
+    erro "Use a tag sha-<7> de um build atual do frontend (ADR-012)."
+    motivo_rotulo="imagem do frontend sem o rotulo ${ROTULO_RUNTIME_API_URL}=true"
+  else
+    erro "não foi possível inspecionar ${REFERENCIA_FRONTEND} (rótulo ${ROTULO_RUNTIME_API_URL})."
+    motivo_rotulo="inspecao da imagem do frontend falhou"
+  fi
   log "Revertendo images.env; o ambiente em execução NÃO foi alterado."
   cp -p "${ARQUIVO_IMAGES_ANTERIOR}" "${ARQUIVO_IMAGES}"
-  registrar_release "FALHA" "${motivo_log}"
+  registrar_release "FALHA" "${motivo_rotulo}"
   exit 1
-}
-
-REFERENCIA_FRONTEND="${FRONTEND_IMAGE}:${TAG_FRONTEND_NOVA}"
-if ! TIPO_FRONTEND="$(tipo_imagem_frontend "${REFERENCIA_FRONTEND}")"; then
-  TIPO_FRONTEND='?'
-  erro "não foi possível inspecionar ${REFERENCIA_FRONTEND} (rótulo ${ROTULO_RUNTIME_API_URL})."
-  abortar_antes_do_up "inspecao da imagem do frontend falhou"
 fi
-
-if RESULTADO_API_URL="$(avaliar_api_url_frontend "${TIPO_FRONTEND}" "${API_URL_NO_ENV}")"; then
-  case "${RESULTADO_API_URL}" in
-    OK_UNICA)
-      ok "frontend: imagem única — API_URL=${API_URL_NO_ENV}" ;;
-    OK_LEGADO)
-      log "frontend: imagem legado (URL da API embutida no build)." ;;
-    OK_LEGADO_IGNORADA)
-      log "frontend: imagem antiga: API_URL ignorada (a URL da API vem embutida no build)." ;;
-    AVISO_LEGADO_INVALIDA)
-      log "frontend: imagem antiga: API_URL ignorada (a URL da API vem embutida no build)."
-      aviso "API_URL em ${ARQUIVO_ENV} tem formato inválido; corrija antes de usar a imagem única."
-      aviso "Formato esperado: ${REGEX_API_URL} (ex.: http://192.168.0.10:8081)." ;;
-  esac
-else
-  case "${RESULTADO_API_URL}" in
-    ERRO_AUSENTE)
-      erro "a imagem ${REFERENCIA_FRONTEND} é ÚNICA (lê a URL da API em runtime), mas API_URL não está definida."
-      erro "Defina API_URL em ${ARQUIVO_ENV} (ex.: API_URL=http://192.168.0.10:${BACKEND_PORT}) e rode o deploy de novo."
-      ;;
-    ERRO_INVALIDA)
-      erro "a imagem ${REFERENCIA_FRONTEND} é ÚNICA, mas API_URL em ${ARQUIVO_ENV} é inválida: '${API_URL_NO_ENV}'."
-      erro "Defina API_URL em ${ARQUIVO_ENV} no formato ${REGEX_API_URL} (sem barra final, sem caminho)."
-      ;;
-    *)
-      erro "verificação de API_URL do frontend retornou '${RESULTADO_API_URL}'."
-      ;;
-  esac
-  abortar_antes_do_up "frontend imagem unica sem API_URL valida no .env"
-fi
+ok "frontend lê a URL da API em runtime — API_URL=${API_URL_NO_ENV}"
 
 # --------------------------------------------------------------------------- #
 # 8. Subir
@@ -562,4 +525,4 @@ docker image prune -f >/dev/null || aviso "docker image prune falhou (ignorado).
 printf '\n'
 compose ps
 printf '\n'
-ok "DEPLOY DE '${ENV_NAME}' CONCLUÍDO — frontend=${TAG_FRONTEND_NOVA} (${TIPO_FRONTEND}) backend=${TAG_BACKEND_NOVA}"
+ok "DEPLOY DE '${ENV_NAME}' CONCLUÍDO — frontend=${TAG_FRONTEND_NOVA} backend=${TAG_BACKEND_NOVA}"
