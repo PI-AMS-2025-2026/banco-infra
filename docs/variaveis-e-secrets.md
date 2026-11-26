@@ -136,6 +136,7 @@ Montadas pelo `docker/docker-compose.yml` a partir das acima:
 | `FRONTEND_URL`, `SMTP_*`, `PASSWORD_RESET_EXPIRATION_MINUTES`, `SWAGGER_ENABLED` | repassadas como estão, com os padrões da tabela acima |
 | `NODE_ENV` / `PORT` (frontend) | fixos em `production` / `3000` |
 | `API_URL` (frontend) | `${API_URL}` do `.env`, repassada como está (obrigatória) |
+| `APP_ENVIRONMENT` (frontend) | `${ENV_NAME}` — a mesma derivação do backend. Lida em runtime pelo frontend apenas para exibir a faixa que indica o ambiente (`dev` / `staging`); com `production` **não há faixa**. Imagens sem esse suporte ignoram a variável. Como `API_URL`, só vale após recriar o container do frontend |
 | `POSTGRES_INITDB_ARGS` (db) | fixo em `--encoding=UTF8 --locale=C` |
 
 ---
@@ -267,7 +268,7 @@ Validação detalhada e mapeamento para CloudFormation:
 | `ALB_NAME` | não | `gini-lb` | Nome do ALB para a descoberta. | `gini-lb` |
 | `BACKEND_TAG` / `FRONTEND_TAG` | **sim** | — | Tags `sha-<7>`; o frontend precisa ser a imagem única (rótulo `br.fatec.gini.runtime-api-url=true`). | `sha-a1b2c3d` |
 | `BACKEND_IMAGE` / `FRONTEND_IMAGE` | não | imagens do ghcr.io da organização | Imagens públicas, sem tag. | `ghcr.io/pi-ams-2025-2026/backend-java` |
-| `APP_ENVIRONMENT` | não | `staging` | Ambiente lógico do backend. | `staging` |
+| `APP_ENVIRONMENT` | não | `staging` | Ambiente lógico, repassado ao backend (emissor dos JWT) **e** ao frontend (faixa do ambiente; `production` não exibe faixa). | `staging` |
 | `ENABLE_MAILPIT` | não | `true` | Sobe o Mailpit (perfil `mailpit`). | `true` |
 | `SMTP_*` | não | valores do Mailpit | Só para SMTP real com `ENABLE_MAILPIT=false`. | — |
 | `INFRA_REF` | não | `main` (aviso) | Tag/commit deste repositório de onde vêm o bootstrap e o compose. | `v1.4.0` |
